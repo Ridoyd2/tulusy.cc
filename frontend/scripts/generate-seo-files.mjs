@@ -141,6 +141,7 @@ const robotsTxt = [
   'User-agent: *',
   'Allow: /',
   'Disallow: /api/',
+  'Disallow: /f/',
   '',
   `Sitemap: ${SITE_URL}/sitemap.xml`,
   '',
