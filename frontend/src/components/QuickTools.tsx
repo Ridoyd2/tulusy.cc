@@ -80,9 +80,9 @@ export const QuickTools: React.FC<QuickToolsProps> = ({ onPresetSelected }) => {
     <section className="w-full space-y-3.5">
       <div className="flex items-end justify-between gap-3">
         <div>
-          <h3 className="text-sm sm:text-base font-semibold text-slate-900 dark:text-white">
-            Direct Workflows
-          </h3>
+          <h2 className="text-sm sm:text-base font-semibold text-slate-900 dark:text-white">
+            Direct Conversion Workflows
+          </h2>
           <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
             Select a workflow to pre-configure target format and open the file selector
           </p>
@@ -116,7 +116,7 @@ export const QuickTools: React.FC<QuickToolsProps> = ({ onPresetSelected }) => {
             </div>
 
             <div>
-              <h4 className="text-xs sm:text-sm font-semibold text-slate-900 dark:text-white">{preset.title}</h4>
+              <h3 className="text-xs sm:text-sm font-semibold text-slate-900 dark:text-white">{preset.title}</h3>
               <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5 leading-relaxed">{preset.desc}</p>
             </div>
           </button>

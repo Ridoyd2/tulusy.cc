@@ -4,8 +4,11 @@ import { ArrowRight } from 'lucide-react';
 import { Navbar } from './Navbar';
 import { Footer } from './Footer';
 import { ToolFaqAccordion } from './ToolFaqAccordion';
+import { getAllSEOSlugs } from '@/lib/seoData';
 import { SITE_URL } from '@/lib/site';
 import { DEDICATED_TOOL_IDS, IndexableToolId, TOOL_ROUTES } from '@/lib/toolsConfig';
+
+const TOTAL_CONVERTERS = getAllSEOSlugs().length;
 
 interface ToolPageShellProps {
   toolId: IndexableToolId;
@@ -97,7 +100,7 @@ export const ToolPageShell: React.FC<ToolPageShellProps> = ({ toolId, children }
                 href="/convert"
                 className="text-xs font-medium text-blue-600 dark:text-blue-400 hover:underline inline-flex items-center gap-1"
               >
-                <span>All 170+ Converters</span>
+                <span>All {TOTAL_CONVERTERS}+ Converters</span>
                 <ArrowRight className="w-3 h-3" />
               </Link>
             </div>

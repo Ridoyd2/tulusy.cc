@@ -1,5 +1,5 @@
 import type { Metadata } from 'next';
-import { SITE_URL } from './site';
+import { OG_IMAGE, SITE_URL } from './site';
 
 export type ActiveTool = 'converter' | 'file-host' | 'load-tester' | 'my-ip' | 'da-checker';
 
@@ -44,9 +44,9 @@ export const TOOL_ROUTES: Record<ActiveTool, ToolRouteConfig> = {
     href: '/share',
     navLabel: 'File Share',
     footerLabel: 'File Share (5GB)',
-    title: '5GB Anonymous File Share - Ephemeral Encrypted Drop without Signup',
+    title: '5GB Anonymous File Share - Encrypted Drop',
     description:
-      'Send files up to 5GB anonymously with zero registration and auto-expiring links. Direct-to-edge R2 multipart uploads, burn-after-download options, and delete tokens.',
+      'Send files up to 5GB anonymously with zero signup and auto-expiring links. Direct R2 multipart uploads, burn-after-download, and instant delete tokens.',
     keywords: [
       '5gb file share',
       'anonymous file upload',
@@ -76,7 +76,7 @@ export const TOOL_ROUTES: Record<ActiveTool, ToolRouteConfig> = {
     href: '/http-benchmark',
     navLabel: 'HTTP Benchmark',
     footerLabel: 'HTTP Benchmark',
-    title: 'Online HTTP Benchmark & Load Tester - API Latency & Throughput',
+    title: 'HTTP Benchmark & Online API Load Tester',
     description:
       'Benchmark websites and REST APIs online for free. Measure TTFB, p50/p95/p99 latency, status codes, and concurrent throughput via Edge Relay or Browser Mode.',
     keywords: [
@@ -104,7 +104,7 @@ export const TOOL_ROUTES: Record<ActiveTool, ToolRouteConfig> = {
     href: '/ip-lookup',
     navLabel: 'IP Inspector',
     footerLabel: 'IP Inspector',
-    title: 'IP Inspector - Public IPv4/IPv6, ASN, Geolocation & HTTP Headers',
+    title: 'IP Inspector - Public IP, ASN & Headers',
     description:
       'Instantly inspect your public IP address or look up any IPv4/IPv6 host. View ISP, ASN, geolocation, proxy headers, and full incoming HTTP request headers.',
     keywords: [
@@ -132,9 +132,9 @@ export const TOOL_ROUTES: Record<ActiveTool, ToolRouteConfig> = {
     href: '/domain-audit',
     navLabel: 'Domain Audit',
     footerLabel: 'Domain Audit',
-    title: 'Domain Audit - Free SSL, Security Headers & Technical SEO Checker',
+    title: 'Domain Audit - SSL, Headers & SEO Checker',
     description:
-      'Run a fast technical SEO and security audit on any domain. Check SSL certificate validity, HTTP security headers, robots.txt, sitemap.xml, canonical tags, and page health.',
+      'Run a fast technical SEO and security audit on any domain. Check SSL validity, HTTP security headers, robots.txt, sitemap.xml, canonicals, and page health.',
     keywords: [
       'technical seo audit tool',
       'ssl security header checker',
@@ -205,11 +205,13 @@ export function buildSeoMetadata({
       url: canonicalUrl,
       siteName: 'Tulusy',
       type: 'website',
+      images: [OG_IMAGE],
     },
     twitter: {
       card,
       title: socialTitle,
       description,
+      images: [OG_IMAGE.url],
     },
   };
 }

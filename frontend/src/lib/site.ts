@@ -12,3 +12,10 @@ export const SITE_DOMAIN = (() => {
 
 export const CONTACT_EMAIL =
   process.env.NEXT_PUBLIC_CONTACT_EMAIL || `admin@${SITE_DOMAIN}`;
+
+export const OG_IMAGE = {
+  url: '/og-image.png',
+  width: 1200,
+  height: 630,
+  alt: 'Tulusy - Free Universal File Converter & 5GB Anonymous Drop',
+};

@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
-import { SITE_URL } from "@/lib/site";
+import { CONTACT_EMAIL, OG_IMAGE, SITE_URL } from "@/lib/site";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -58,11 +58,13 @@ export const metadata: Metadata = {
     title: "Tulusy - Free Universal File Converter & 5GB Anonymous Drop",
     description:
       "Lightning-fast, privacy-first file conversion and anonymous 5GB file sharing. Convert images, PDFs, Word, PowerPoint, and Excel spreadsheets instantly.",
+    images: [OG_IMAGE],
   },
   twitter: {
     card: "summary_large_image",
     title: "Tulusy - Universal File Converter & 5GB Drop",
     description: "Fast, privacy-friendly online converter for images, PDFs, documents, and anonymous 5GB file sharing.",
+    images: [OG_IMAGE.url],
   },
   robots: {
     index: true,
@@ -84,14 +86,24 @@ export default function RootLayout({
 }) {
   const globalSchema = {
     "@context": "https://schema.org",
-    "@type": "WebSite",
-    name: "Tulusy",
-    url: SITE_URL,
-    potentialAction: {
-      "@type": "SearchAction",
-      target: `${SITE_URL}/convert/{search_term_string}`,
-      "query-input": "required name=search_term_string",
-    },
+    "@graph": [
+      {
+        "@type": "WebSite",
+        "@id": `${SITE_URL}/#website`,
+        name: "Tulusy",
+        url: SITE_URL,
+        description:
+          "Free online file converter for images, PDFs, documents, and spreadsheets, plus 5GB anonymous file sharing.",
+      },
+      {
+        "@type": "Organization",
+        "@id": `${SITE_URL}/#organization`,
+        name: "Tulusy",
+        url: SITE_URL,
+        logo: `${SITE_URL}/icon.svg`,
+        email: CONTACT_EMAIL,
+      },
+    ],
   };
 
   return (

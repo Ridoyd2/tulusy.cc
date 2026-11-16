@@ -34,11 +34,13 @@ export const ToolFaqAccordion: React.FC<ToolFaqAccordionProps> = ({ faqs }) => {
                   }`}
                 />
               </button>
-              {isOpen && (
-                <div className="px-4 pb-4 pt-1 text-xs sm:text-sm text-slate-600 dark:text-slate-400 leading-relaxed border-t border-slate-100 dark:border-slate-800/60">
-                  {faq.a}
-                </div>
-              )}
+              <div
+                className={`px-4 pb-4 pt-1 text-xs sm:text-sm text-slate-600 dark:text-slate-400 leading-relaxed border-t border-slate-100 dark:border-slate-800/60 ${
+                  isOpen ? 'block' : 'hidden'
+                }`}
+              >
+                {faq.a}
+              </div>
             </div>
           );
         })}

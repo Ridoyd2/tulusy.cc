@@ -4,8 +4,8 @@ import { CONTACT_EMAIL, SITE_DOMAIN } from '@/lib/site';
 import { buildSeoMetadata } from '@/lib/toolsConfig';
 
 export const metadata = buildSeoMetadata({
-  title: 'Terms of Service',
-  description: `Acceptable use, ephemeral file-sharing limits, and DMCA takedown policies for ${SITE_DOMAIN}.`,
+  title: 'Terms of Service - Acceptable Use & DMCA',
+  description: `Review acceptable use policies, ephemeral 5GB file-sharing expiration terms, and fast DMCA abuse takedowns on ${SITE_DOMAIN}.`,
   path: '/terms',
   card: 'summary',
 });

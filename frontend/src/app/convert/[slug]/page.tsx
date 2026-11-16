@@ -2,7 +2,7 @@ import React from 'react';
 import { Metadata } from 'next';
 import { notFound } from 'next/navigation';
 import { getSEOPair, getAllSEOSlugs } from '@/lib/seoData';
-import { SITE_URL } from '@/lib/site';
+import { OG_IMAGE, SITE_URL } from '@/lib/site';
 import { ConvertClient } from './ConvertClient';
 
 interface PageProps {
@@ -40,11 +40,13 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
       url: `${SITE_URL}/convert/${seoData.slug}`,
       siteName: 'Tulusy',
       type: 'website',
+      images: [OG_IMAGE],
     },
     twitter: {
       card: 'summary_large_image',
       title: socialTitle,
       description: seoData.description,
+      images: [OG_IMAGE.url],
     },
   };
 }

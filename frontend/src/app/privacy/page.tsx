@@ -4,7 +4,7 @@ import { CONTACT_EMAIL, SITE_DOMAIN } from '@/lib/site';
 import { buildSeoMetadata } from '@/lib/toolsConfig';
 
 export const metadata = buildSeoMetadata({
-  title: 'Privacy Policy',
+  title: 'Privacy Policy - Zero File Retention',
   description: `Learn how ${SITE_DOMAIN} processes converted files, ephemeral 5GB file drops, IP lookups, and contact inquiries with zero retention.`,
   path: '/privacy',
   card: 'summary',

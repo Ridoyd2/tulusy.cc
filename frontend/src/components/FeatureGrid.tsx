@@ -29,6 +29,7 @@ export const FeatureGrid: React.FC = () => {
 
   return (
     <section className="w-full pt-8 border-t border-slate-200/80 dark:border-slate-800/80">
+      <h2 className="sr-only">Core Conversion Capabilities</h2>
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
         {features.map((f, i) => (
           <div

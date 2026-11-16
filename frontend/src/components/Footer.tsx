@@ -44,10 +44,10 @@ export const Footer: React.FC<FooterProps> = ({ onSelectTool }) => {
           </div>
 
           {/* Tools Column */}
-          <div className="space-y-2.5">
-            <h4 className="text-xs font-semibold uppercase tracking-wider text-slate-900 dark:text-white">
+          <nav aria-label="Tools" className="space-y-2.5">
+            <p className="text-xs font-semibold uppercase tracking-wider text-slate-900 dark:text-white">
               Tools
-            </h4>
+            </p>
             <ul className="space-y-2 text-xs">
               {TOOL_LIST.map(tool => (
                 <li key={tool.id}>
@@ -65,13 +65,13 @@ export const Footer: React.FC<FooterProps> = ({ onSelectTool }) => {
                 </li>
               ))}
             </ul>
-          </div>
+          </nav>
 
           {/* Popular Conversions Column */}
-          <div className="space-y-2.5">
-            <h4 className="text-xs font-semibold uppercase tracking-wider text-slate-900 dark:text-white">
+          <nav aria-label="Popular Conversions" className="space-y-2.5">
+            <p className="text-xs font-semibold uppercase tracking-wider text-slate-900 dark:text-white">
               Conversions
-            </h4>
+            </p>
             <ul className="space-y-2 text-xs">
               {popularPairs.map(p => (
                 <li key={p.href}>
@@ -84,7 +84,7 @@ export const Footer: React.FC<FooterProps> = ({ onSelectTool }) => {
                 </li>
               ))}
             </ul>
-          </div>
+          </nav>
         </div>
 
         {/* Bottom Sub-footer */}

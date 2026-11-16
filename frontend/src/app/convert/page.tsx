@@ -4,11 +4,11 @@ import { ArrowRight } from 'lucide-react';
 import { Navbar } from '@/components/Navbar';
 import { Footer } from '@/components/Footer';
 import { getConverterDirectoryGroups, getAllSEOSlugs } from '@/lib/seoData';
-import { SITE_URL } from '@/lib/site';
+import { OG_IMAGE, SITE_URL } from '@/lib/site';
 
 const totalPairs = getAllSEOSlugs().length;
-const directoryTitle = `All File Converters - ${totalPairs}+ Free Format Conversion Tools`;
-const directoryDescription = `Browse all ${totalPairs}+ free online file converters on Tulusy. Convert PDFs, Word documents, Excel spreadsheets, PowerPoint presentations, images, icons, and vector graphics securely.`;
+const directoryTitle = `All File Converters - ${totalPairs}+ Free Tools`;
+const directoryDescription = `Browse ${totalPairs}+ free online file converters on Tulusy. Convert PDFs, Word, Excel, PowerPoint, images, icons, and vectors with zero retention.`;
 
 export const metadata: Metadata = {
   title: directoryTitle,
@@ -29,11 +29,13 @@ export const metadata: Metadata = {
     url: `${SITE_URL}/convert`,
     siteName: 'Tulusy',
     type: 'website',
+    images: [OG_IMAGE],
   },
   twitter: {
     card: 'summary_large_image',
     title: `${directoryTitle} | Tulusy`,
     description: directoryDescription,
+    images: [OG_IMAGE.url],
   },
 };
 

@@ -5,7 +5,7 @@ import { CONTACT_EMAIL, SITE_DOMAIN } from '@/lib/site';
 import { buildSeoMetadata } from '@/lib/toolsConfig';
 
 export const metadata = buildSeoMetadata({
-  title: 'Contact & DMCA Support',
+  title: 'Contact & DMCA Abuse Support',
   description: `Reach the ${SITE_DOMAIN} team via ${CONTACT_EMAIL} for support, privacy questions, security disclosures, or urgent DMCA / abuse takedowns.`,
   path: '/contact',
   card: 'summary',

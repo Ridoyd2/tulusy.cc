@@ -1,8 +1,9 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { UploadCloud } from 'lucide-react';
+import { ArrowRight, UploadCloud } from 'lucide-react';
 import { Navbar } from './Navbar';
 import { Dropzone, DropzoneHandle } from './Dropzone';
 import { FileQueue } from './FileQueue';
@@ -13,7 +14,7 @@ import { QuickTools } from './QuickTools';
 import { FeatureGrid } from './FeatureGrid';
 import { Footer } from './Footer';
 import { useConversionQueue } from '../hooks/useConversionQueue';
-import { ActiveTool, getToolHref } from '@/lib/toolsConfig';
+import { ActiveTool, DEDICATED_TOOL_IDS, TOOL_ROUTES, getToolHref } from '@/lib/toolsConfig';
 
 const LEGACY_TOOL_PARAMS: ActiveTool[] = ['file-host', 'load-tester', 'my-ip', 'da-checker'];
 
@@ -104,7 +105,7 @@ export const HomeClient: React.FC = () => {
         <div className="space-y-7 sm:space-y-9">
           <div className="text-center space-y-2 max-w-2xl mx-auto">
             <h1 className="text-2xl sm:text-3xl md:text-4xl font-bold tracking-tight text-slate-900 dark:text-white">
-              File Conversion Engine
+              Free Universal File Converter
             </h1>
             <p className="text-xs sm:text-sm text-slate-600 dark:text-slate-400 leading-relaxed">
               Convert between raster images, vector graphics, PDFs, Word documents, presentations, and spreadsheets. Ephemeral processing with zero retention.
@@ -153,6 +154,36 @@ export const HomeClient: React.FC = () => {
           />
 
           <FeatureGrid />
+
+          <section className="space-y-3.5 pt-6 border-t border-slate-200 dark:border-slate-800">
+            <div className="flex items-center justify-between gap-3">
+              <h2 className="text-sm sm:text-base font-semibold text-slate-900 dark:text-white">
+                More Free Utilities
+              </h2>
+              <Link
+                href="/convert"
+                className="text-xs font-medium text-blue-600 dark:text-blue-400 hover:underline inline-flex items-center gap-1"
+              >
+                <span>Browse All Converters</span>
+                <ArrowRight className="w-3 h-3" />
+              </Link>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
+              {DEDICATED_TOOL_IDS.map(id => {
+                const tool = TOOL_ROUTES[id];
+                return (
+                  <Link
+                    key={tool.id}
+                    href={tool.href}
+                    className="p-3.5 rounded-xl panel panel-hover flex items-center justify-between gap-2 text-xs font-medium text-slate-700 dark:text-slate-300"
+                  >
+                    <span>{tool.footerLabel}</span>
+                    <ArrowRight className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                  </Link>
+                );
+              })}
+            </div>
+          </section>
         </div>
       </main>
 
