@@ -27,21 +27,22 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
 
   if (!file) {
     return {
-      title: 'File Unavailable | Tulusy',
+      title: 'File Unavailable',
       description: 'The requested file has expired or does not exist.',
       robots: { index: false, follow: false },
     };
   }
 
-  const title = `Download ${file.filename} | Tulusy File Share`;
+  const pageTitle = `Download ${file.filename}`;
+  const socialTitle = `${pageTitle} | Tulusy File Share`;
   const desc = `Download ${file.filename} (${(file.file_size / (1024 * 1024)).toFixed(2)} MB). Anonymous file hosting powered by Cloudflare R2 with automatic expiration.`;
 
   return {
-    title,
+    title: pageTitle,
     description: desc,
     robots: { index: false, follow: false },
     openGraph: {
-      title,
+      title: socialTitle,
       description: desc,
       type: 'website',
       url: `${SITE_URL}/f/${id}`,
@@ -49,7 +50,7 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
     },
     twitter: {
       card: 'summary',
-      title,
+      title: socialTitle,
       description: desc,
     },
   };

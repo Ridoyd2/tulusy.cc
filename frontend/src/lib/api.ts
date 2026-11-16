@@ -178,6 +178,8 @@ export async function executeBrowserLoadTest(params: {
   }> = [];
 
   let nextId = 1;
+  let preferNoCors = false;
+  let opaqueCount = 0;
   const totalStart = performance.now();
 
   const runWorker = async () => {
@@ -195,35 +197,45 @@ export async function executeBrowserLoadTest(params: {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), timeoutMs);
 
+      const fetchOpaque = async () => {
+        const opaqueResp = await fetch(benchUrl, {
+          method: method === 'PUT' ? 'POST' : method,
+          body: method === 'POST' ? params.payload : undefined,
+          cache: 'no-store',
+          mode: 'no-cors',
+          signal: controller.signal,
+        });
+        if (opaqueResp.type === 'opaque' || opaqueResp.ok) {
+          statusCode = 200;
+          if (opaqueResp.type === 'opaque') opaqueCount++;
+        } else {
+          statusCode = opaqueResp.status || 0;
+          if (!statusCode) errStr = 'Connection Error';
+        }
+      };
+
       try {
-        try {
-          const corsResp = await fetch(benchUrl, {
-            method,
-            body: method === 'POST' || method === 'PUT' ? params.payload : undefined,
-            cache: 'no-store',
-            mode: 'cors',
-            signal: controller.signal,
-          });
-          statusCode = corsResp.status || 200;
-          const buf = await corsResp.arrayBuffer();
-          sizeBytes = buf.byteLength;
-        } catch (corsErr: any) {
-          if (corsErr?.name === 'AbortError') {
-            throw corsErr;
-          }
-          // Fallback to opaque no-cors timing when target endpoint does not send CORS headers
-          const opaqueResp = await fetch(benchUrl, {
-            method: method === 'PUT' ? 'POST' : method,
-            body: method === 'POST' ? params.payload : undefined,
-            cache: 'no-store',
-            mode: 'no-cors',
-            signal: controller.signal,
-          });
-          if (opaqueResp.type === 'opaque' || opaqueResp.ok) {
-            statusCode = 200;
-          } else {
-            statusCode = opaqueResp.status || 0;
-            if (!statusCode) errStr = 'Connection Error';
+        if (preferNoCors) {
+          await fetchOpaque();
+        } else {
+          try {
+            const corsResp = await fetch(benchUrl, {
+              method,
+              body: method === 'POST' || method === 'PUT' ? params.payload : undefined,
+              cache: 'no-store',
+              mode: 'cors',
+              signal: controller.signal,
+            });
+            statusCode = corsResp.status || 200;
+            const buf = await corsResp.arrayBuffer();
+            sizeBytes = buf.byteLength;
+          } catch (corsErr: any) {
+            if (corsErr?.name === 'AbortError') {
+              throw corsErr;
+            }
+            // Fallback to opaque no-cors timing when target endpoint does not send CORS headers
+            preferNoCors = true;
+            await fetchOpaque();
           }
         }
       } catch (err: any) {
@@ -305,8 +317,20 @@ export async function executeBrowserLoadTest(params: {
     },
     code_summary: codeSummary,
     status_distribution: statusDistribution,
+    opaque_responses: opaqueCount,
     timeline: results.slice(0, 100),
   };
+}
+
+export async function fetchProxyStatus(): Promise<{ proxied: boolean; mode: string }> {
+  try {
+    const base = getApiBaseUrl();
+    const res = await fetch(`${base}/api/tools/proxy-status`, { method: 'GET', cache: 'no-store' });
+    if (!res.ok) return { proxied: false, mode: 'browser-direct' };
+    return await res.json();
+  } catch {
+    return { proxied: false, mode: 'browser-direct' };
+  }
 }
 
 export async function executeLoadTest(params: {
@@ -332,7 +356,12 @@ export async function executeLoadTest(params: {
 
   if (response.status === 403) {
     // Backend blocked direct unproxied connection to protect VPS IP -> fallback seamlessly to Client Browser
-    return executeBrowserLoadTest(params);
+    const browserResult = await executeBrowserLoadTest(params);
+    return {
+      ...browserResult,
+      fallback_notice:
+        'Edge Relay is not configured on the server (CF_WORKER_RELAY_URL / WARP). Executed in Client Browser Mode to protect the server origin IP.',
+    };
   }
 
   if (!response.ok) {

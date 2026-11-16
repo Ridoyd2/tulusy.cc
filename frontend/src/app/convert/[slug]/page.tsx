@@ -20,10 +20,12 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
 
   if (!seoData) {
     return {
-      title: 'Converter Not Found | Tulusy',
+      title: 'Converter Not Found',
       description: 'The requested file converter could not be found.',
     };
   }
+
+  const socialTitle = `${seoData.title} | Tulusy`;
 
   return {
     title: seoData.title,
@@ -33,7 +35,7 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
       canonical: `${SITE_URL}/convert/${seoData.slug}`,
     },
     openGraph: {
-      title: seoData.title,
+      title: socialTitle,
       description: seoData.description,
       url: `${SITE_URL}/convert/${seoData.slug}`,
       siteName: 'Tulusy',
@@ -41,7 +43,7 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
     },
     twitter: {
       card: 'summary_large_image',
-      title: seoData.title,
+      title: socialTitle,
       description: seoData.description,
     },
   };

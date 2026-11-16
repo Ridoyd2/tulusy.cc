@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useSyncExternalStore } from 'react';
 import {
   HardDriveUpload,
   Shield,
@@ -31,6 +31,77 @@ interface UploadResult {
   expiresAt: number;
   expiryLabel: string;
   isBurn: boolean;
+}
+
+const RECENT_SHARES_KEY = 'tulusy_recent_shares';
+const EMPTY_SHARES: UploadResult[] = [];
+const shareListeners = new Set<() => void>();
+let cachedSharesRaw: string | null = null;
+let cachedSharesList: UploadResult[] = EMPTY_SHARES;
+
+function subscribeRecentShares(callback: () => void) {
+  shareListeners.add(callback);
+  const onStorage = (e: StorageEvent) => {
+    if (e.key === RECENT_SHARES_KEY) callback();
+  };
+  if (typeof window !== 'undefined') {
+    window.addEventListener('storage', onStorage);
+  }
+  return () => {
+    shareListeners.delete(callback);
+    if (typeof window !== 'undefined') {
+      window.removeEventListener('storage', onStorage);
+    }
+  };
+}
+
+function getRecentSharesSnapshot(): UploadResult[] {
+  if (typeof window === 'undefined') return EMPTY_SHARES;
+  try {
+    const raw = window.localStorage.getItem(RECENT_SHARES_KEY);
+    if (raw === cachedSharesRaw) return cachedSharesList;
+    cachedSharesRaw = raw;
+    if (!raw) {
+      cachedSharesList = EMPTY_SHARES;
+      return cachedSharesList;
+    }
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) {
+      cachedSharesList = EMPTY_SHARES;
+      return cachedSharesList;
+    }
+    const nowSec = Math.floor(Date.now() / 1000);
+    cachedSharesList = parsed
+      .filter(
+        (item): item is UploadResult =>
+          Boolean(item?.fileId && item?.deleteToken && item?.shareUrl) &&
+          typeof item.expiresAt === 'number' &&
+          item.expiresAt > nowSec
+      )
+      .slice(0, 10);
+    return cachedSharesList;
+  } catch {
+    return EMPTY_SHARES;
+  }
+}
+
+function getRecentSharesServerSnapshot(): UploadResult[] {
+  return EMPTY_SHARES;
+}
+
+function saveRecentShares(shares: UploadResult[]) {
+  if (typeof window === 'undefined') return;
+  try {
+    const nowSec = Math.floor(Date.now() / 1000);
+    const active = shares
+      .filter(s => typeof s.expiresAt === 'number' && s.expiresAt > nowSec)
+      .slice(0, 10);
+    const raw = JSON.stringify(active);
+    window.localStorage.setItem(RECENT_SHARES_KEY, raw);
+    cachedSharesRaw = raw;
+    cachedSharesList = active;
+    shareListeners.forEach(listener => listener());
+  } catch {}
 }
 
 type ExpiryChoice =
@@ -64,10 +135,18 @@ export const FileHostTool: React.FC = () => {
 
   // Result state
   const [result, setResult] = useState<UploadResult | null>(null);
+  const recentShares = useSyncExternalStore(
+    subscribeRecentShares,
+    getRecentSharesSnapshot,
+    getRecentSharesServerSnapshot
+  );
   const [copiedLink, setCopiedLink] = useState<boolean>(false);
+  const [copiedRecentId, setCopiedRecentId] = useState<string | null>(null);
   const [showQr, setShowQr] = useState<boolean>(false);
   const [confirmDelete, setConfirmDelete] = useState<boolean>(false);
+  const [confirmRecentDeleteId, setConfirmRecentDeleteId] = useState<string | null>(null);
   const [isDeleting, setIsDeleting] = useState<boolean>(false);
+  const [deletingShareId, setDeletingShareId] = useState<string | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -216,7 +295,7 @@ export const FileHostTool: React.FC = () => {
       const origin = typeof window !== 'undefined' ? window.location.origin : SITE_URL;
       const shareUrl = `${origin}/f/${session.file_id}`;
 
-      setResult({
+      const uploadResult: UploadResult = {
         fileId: session.file_id,
         filename: file.name,
         fileSize: file.size,
@@ -225,7 +304,14 @@ export const FileHostTool: React.FC = () => {
         expiresAt: session.expires_at,
         expiryLabel: selectedExpiry.label,
         isBurn: selectedExpiry.burn,
-      });
+      };
+
+      setResult(uploadResult);
+      const nextShares = [
+        uploadResult,
+        ...getRecentSharesSnapshot().filter(s => s.fileId !== uploadResult.fileId),
+      ].slice(0, 10);
+      saveRecentShares(nextShares);
 
       setFile(null);
       setConfirmDelete(false);
@@ -243,19 +329,24 @@ export const FileHostTool: React.FC = () => {
     setTimeout(() => setCopiedLink(false), 2000);
   };
 
-  const handleDeleteNow = async () => {
-    if (!result) return;
+  const deleteShareById = async (fileId: string, deleteToken: string) => {
     setIsDeleting(true);
+    setDeletingShareId(fileId);
     setErrorMessage(null);
     try {
       const apiUrl = getApiBaseUrl();
       const resp = await fetch(
-        `${apiUrl}/api/hosting/delete/${result.fileId}?token=${encodeURIComponent(result.deleteToken)}`,
+        `${apiUrl}/api/hosting/delete/${fileId}?token=${encodeURIComponent(deleteToken)}`,
         { method: 'DELETE' }
       );
-      if (resp.ok) {
-        setResult(null);
-        setConfirmDelete(false);
+      if (resp.ok || resp.status === 404) {
+        const nextShares = getRecentSharesSnapshot().filter(s => s.fileId !== fileId);
+        saveRecentShares(nextShares);
+        if (result?.fileId === fileId) {
+          setResult(null);
+          setConfirmDelete(false);
+        }
+        setConfirmRecentDeleteId(null);
       } else {
         setErrorMessage('Failed to delete file from storage.');
       }
@@ -263,7 +354,13 @@ export const FileHostTool: React.FC = () => {
       setErrorMessage('Network error while deleting file.');
     } finally {
       setIsDeleting(false);
+      setDeletingShareId(null);
     }
+  };
+
+  const handleDeleteNow = async () => {
+    if (!result) return;
+    await deleteShareById(result.fileId, result.deleteToken);
   };
 
   return (
@@ -620,6 +717,94 @@ export const FileHostTool: React.FC = () => {
               >
                 Upload Another File
               </button>
+            </div>
+          </div>
+        )}
+
+        {/* Recent Active Shares persisted in browser localStorage */}
+        {recentShares.filter(s => s.fileId !== result?.fileId).length > 0 && (
+          <div className="mt-5 panel rounded-xl p-4 sm:p-5 space-y-3">
+            <div className="flex items-center justify-between">
+              <h3 className="text-xs sm:text-sm font-semibold text-slate-900 dark:text-white">
+                Recent Active Shares (This Browser)
+              </h3>
+              <span className="text-[11px] text-slate-500">
+                Stored locally for quick link &amp; delete access
+              </span>
+            </div>
+
+            <div className="space-y-2">
+              {recentShares
+                .filter(s => s.fileId !== result?.fileId)
+                .map(share => (
+                  <div
+                    key={share.fileId}
+                    className="p-3 rounded-lg bg-slate-50 dark:bg-slate-800/40 border border-slate-200/70 dark:border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5"
+                  >
+                    <div className="min-w-0">
+                      <p className="text-xs font-semibold text-slate-900 dark:text-white truncate">
+                        {share.filename}
+                      </p>
+                      <p className="text-[11px] text-slate-500 dark:text-slate-400 font-mono tabular-nums">
+                        {formatBytes(share.fileSize)} · {share.isBurn ? 'Burn on read' : share.expiryLabel}
+                      </p>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-1.5 shrink-0 text-xs">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          navigator.clipboard.writeText(share.shareUrl);
+                          setCopiedRecentId(share.fileId);
+                          setTimeout(() => setCopiedRecentId(null), 1800);
+                        }}
+                        className="px-2.5 py-1 rounded-md border border-slate-200 dark:border-slate-700 hover:bg-white dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 font-medium flex items-center gap-1 cursor-pointer"
+                      >
+                        {copiedRecentId === share.fileId ? <Check className="w-3 h-3 text-emerald-600" /> : <Copy className="w-3 h-3" />}
+                        <span>{copiedRecentId === share.fileId ? 'Copied' : 'Copy'}</span>
+                      </button>
+
+                      <a
+                        href={share.shareUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="px-2.5 py-1 rounded-md border border-slate-200 dark:border-slate-700 hover:bg-white dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 font-medium flex items-center gap-1"
+                      >
+                        <ExternalLink className="w-3 h-3" />
+                        <span>Open</span>
+                      </a>
+
+                      {confirmRecentDeleteId === share.fileId ? (
+                        <>
+                          <button
+                            type="button"
+                            disabled={deletingShareId === share.fileId}
+                            onClick={() => deleteShareById(share.fileId, share.deleteToken)}
+                            className="px-2.5 py-1 rounded-md bg-red-600 hover:bg-red-700 text-white font-medium cursor-pointer disabled:opacity-50"
+                          >
+                            {deletingShareId === share.fileId ? 'Deleting...' : 'Confirm'}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setConfirmRecentDeleteId(null)}
+                            className="px-2 py-1 rounded-md bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-200 cursor-pointer"
+                          >
+                            Cancel
+                          </button>
+                        </>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => setConfirmRecentDeleteId(share.fileId)}
+                          className="px-2.5 py-1 rounded-md text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/30 font-medium flex items-center gap-1 cursor-pointer"
+                        >
+                          <Trash2 className="w-3 h-3" />
+                          <span>Delete</span>
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                ))}
             </div>
           </div>
         )}

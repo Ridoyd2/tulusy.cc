@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Activity,
   Play,
@@ -9,9 +9,10 @@ import {
   AlertTriangle,
   Download,
   Clock,
-  Layers
+  Layers,
+  Info
 } from 'lucide-react';
-import { executeLoadTest, downloadBlob } from '../lib/api';
+import { executeLoadTest, fetchProxyStatus, downloadBlob } from '../lib/api';
 
 export const LoadTester: React.FC = () => {
   const [url, setUrl] = useState('https://httpbin.org/get');
@@ -19,9 +20,14 @@ export const LoadTester: React.FC = () => {
   const [concurrency, setConcurrency] = useState(5);
   const [method, setMethod] = useState('GET');
   const [executionMode, setExecutionMode] = useState<'browser' | 'edge'>('browser');
+  const [proxyStatus, setProxyStatus] = useState<{ proxied: boolean; mode: string } | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [results, setResults] = useState<any | null>(null);
+
+  useEffect(() => {
+    fetchProxyStatus().then(setProxyStatus);
+  }, []);
 
   const applyPreset = (presetUrl: string, reqs: number, conc: number) => {
     setUrl(presetUrl);
@@ -42,14 +48,20 @@ export const LoadTester: React.FC = () => {
       setUrl(targetUrl);
     }
 
+    const edgeUnavailable = executionMode === 'edge' && proxyStatus !== null && !proxyStatus.proxied;
+
     try {
       const data = await executeLoadTest({
         url: targetUrl,
         requests_count: requestsCount,
         concurrency: concurrency,
         method: method,
-        executionMode,
+        executionMode: edgeUnavailable ? 'browser' : executionMode,
       });
+      if (edgeUnavailable && !data.fallback_notice) {
+        data.fallback_notice =
+          'Edge Relay is not configured on the server (CF_WORKER_RELAY_URL / WARP). Executed in Client Browser Mode to protect the server origin IP.';
+      }
       setResults(data);
     } catch (err: any) {
       setError(err.message || 'Load test execution failed');
@@ -251,6 +263,15 @@ export const LoadTester: React.FC = () => {
           </div>
         </form>
 
+        {executionMode === 'edge' && proxyStatus && !proxyStatus.proxied && (
+          <div className="p-3 rounded-lg bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900/60 text-amber-800 dark:text-amber-200 text-xs flex items-start gap-2">
+            <Info className="w-4 h-4 shrink-0 mt-0.5 text-amber-600 dark:text-amber-400" />
+            <span>
+              Edge Relay is not configured on the server (`CF_WORKER_RELAY_URL` / WARP). Benchmarks will run in <strong>Client Browser Mode</strong> so the server IP stays hidden.
+            </span>
+          </div>
+        )}
+
         {error && (
           <div className="p-3.5 rounded-lg bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-900/60 text-red-700 dark:text-red-300 text-xs flex items-start gap-2.5">
             <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5 text-red-500" />
@@ -265,6 +286,13 @@ export const LoadTester: React.FC = () => {
       {/* Results View */}
       {results && (
         <div className="space-y-4">
+          {results.fallback_notice && (
+            <div className="p-3 rounded-lg bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900/60 text-amber-800 dark:text-amber-200 text-xs flex items-start gap-2">
+              <Info className="w-4 h-4 shrink-0 mt-0.5 text-amber-600 dark:text-amber-400" />
+              <span>{results.fallback_notice}</span>
+            </div>
+          )}
+
           {/* Top KPI Cards */}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
             <div className="panel p-4 rounded-xl space-y-1">
@@ -283,7 +311,9 @@ export const LoadTester: React.FC = () => {
                 {results.requests_per_second} <span className="text-xs font-normal text-slate-400">req/s</span>
               </p>
               <p className="text-[11px] text-slate-400 font-mono tabular-nums truncate">
-                {results.transfer_rate_kbps} KB/s
+                {results.total_bytes_transferred === 0 && results.opaque_responses > 0
+                  ? 'Opaque (No-CORS)'
+                  : `${results.transfer_rate_kbps} KB/s`}
               </p>
             </div>
 
@@ -381,6 +411,11 @@ export const LoadTester: React.FC = () => {
                   </span>
                 ))}
               </div>
+              {results.opaque_responses > 0 && (
+                <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                  {results.opaque_responses} opaque no-CORS response{results.opaque_responses === 1 ? '' : 's'} (status inferred as reachable; payload size hidden by browser CORS policy).
+                </p>
+              )}
             </div>
           </div>
 
