@@ -176,29 +176,51 @@ export function getToolHref(tool: ActiveTool): string {
   return TOOL_ROUTES[tool]?.href || '/';
 }
 
-export function buildToolMetadata(toolId: IndexableToolId): Metadata {
-  const tool = TOOL_ROUTES[toolId];
-  const canonicalUrl = `${SITE_URL}${tool.href}`;
-  const socialTitle = `${tool.title} | Tulusy`;
+export function buildSeoMetadata({
+  title,
+  description,
+  path,
+  keywords,
+  card = 'summary_large_image',
+}: {
+  title: string;
+  description: string;
+  path: string;
+  keywords?: string[];
+  card?: 'summary' | 'summary_large_image';
+}): Metadata {
+  const canonicalUrl = `${SITE_URL}${path}`;
+  const socialTitle = `${title} | Tulusy`;
 
   return {
-    title: tool.title,
-    description: tool.description,
-    keywords: tool.keywords,
+    title,
+    description,
+    ...(keywords ? { keywords } : {}),
     alternates: {
       canonical: canonicalUrl,
     },
     openGraph: {
       title: socialTitle,
-      description: tool.description,
+      description,
       url: canonicalUrl,
       siteName: 'Tulusy',
       type: 'website',
     },
     twitter: {
-      card: 'summary_large_image',
+      card,
       title: socialTitle,
-      description: tool.description,
+      description,
     },
   };
+}
+
+export function buildToolMetadata(toolId: IndexableToolId): Metadata {
+  const tool = TOOL_ROUTES[toolId];
+  return buildSeoMetadata({
+    title: tool.title,
+    description: tool.description,
+    path: tool.href,
+    keywords: tool.keywords,
+    card: 'summary_large_image',
+  });
 }

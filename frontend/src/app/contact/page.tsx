@@ -1,24 +1,15 @@
-import type { Metadata } from 'next';
 import Link from 'next/link';
 import { Mail, ShieldAlert, Bug } from 'lucide-react';
 import { LegalPageShell } from '@/components/LegalPageShell';
-import { CONTACT_EMAIL, SITE_DOMAIN, SITE_URL } from '@/lib/site';
+import { CONTACT_EMAIL, SITE_DOMAIN } from '@/lib/site';
+import { buildSeoMetadata } from '@/lib/toolsConfig';
 
-const title = 'Contact & DMCA Support';
-const description = `Reach the ${SITE_DOMAIN} team via ${CONTACT_EMAIL} for support, privacy questions, security disclosures, or urgent DMCA / abuse takedowns.`;
-
-export const metadata: Metadata = {
-  title,
-  description,
-  alternates: { canonical: `${SITE_URL}/contact` },
-  openGraph: {
-    title: `${title} | Tulusy`,
-    description,
-    url: `${SITE_URL}/contact`,
-    siteName: 'Tulusy',
-    type: 'website',
-  },
-};
+export const metadata = buildSeoMetadata({
+  title: 'Contact & DMCA Support',
+  description: `Reach the ${SITE_DOMAIN} team via ${CONTACT_EMAIL} for support, privacy questions, security disclosures, or urgent DMCA / abuse takedowns.`,
+  path: '/contact',
+  card: 'summary',
+});
 
 export default function ContactPage() {
   return (
@@ -51,7 +42,11 @@ export default function ContactPage() {
           </div>
           <h2 className="text-sm font-semibold text-slate-900 dark:text-white">DMCA &amp; Abuse</h2>
           <p className="text-xs">
-            Report infringing or malicious hosted files using the link&apos;s Report Abuse button or email us the exact `/f/...` share ID:
+            Report infringing or malicious hosted files using the link&apos;s Report Abuse button or email us the exact{' '}
+            <code className="font-mono text-[11px] px-1 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-slate-800 dark:text-slate-200">
+              /f/...
+            </code>{' '}
+            share ID:
           </p>
           <a
             href={`mailto:${CONTACT_EMAIL}?subject=DMCA%20%2F%20Abuse%20Report`}

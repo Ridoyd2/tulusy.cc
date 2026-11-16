@@ -1,23 +1,14 @@
-import type { Metadata } from 'next';
 import Link from 'next/link';
 import { LegalPageShell } from '@/components/LegalPageShell';
-import { CONTACT_EMAIL, SITE_DOMAIN, SITE_URL } from '@/lib/site';
+import { CONTACT_EMAIL, SITE_DOMAIN } from '@/lib/site';
+import { buildSeoMetadata } from '@/lib/toolsConfig';
 
-const title = 'Terms of Service';
-const description = `Acceptable use, ephemeral file-sharing limits, and DMCA takedown policies for ${SITE_DOMAIN}.`;
-
-export const metadata: Metadata = {
-  title,
-  description,
-  alternates: { canonical: `${SITE_URL}/terms` },
-  openGraph: {
-    title: `${title} | Tulusy`,
-    description,
-    url: `${SITE_URL}/terms`,
-    siteName: 'Tulusy',
-    type: 'website',
-  },
-};
+export const metadata = buildSeoMetadata({
+  title: 'Terms of Service',
+  description: `Acceptable use, ephemeral file-sharing limits, and DMCA takedown policies for ${SITE_DOMAIN}.`,
+  path: '/terms',
+  card: 'summary',
+});
 
 export default function TermsPage() {
   return (
@@ -54,7 +45,11 @@ export default function TermsPage() {
           <a href={`mailto:${CONTACT_EMAIL}`} className="text-blue-600 dark:text-blue-400 hover:underline font-medium">
             {CONTACT_EMAIL}
           </a>{' '}
-          with the exact `/f/...` URL (see our{' '}
+          with the exact{' '}
+          <code className="font-mono text-[11px] px-1 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-slate-800 dark:text-slate-200">
+            /f/...
+          </code>{' '}
+          URL (see our{' '}
           <Link href="/contact" className="text-blue-600 dark:text-blue-400 hover:underline font-medium">
             Contact &amp; DMCA instructions
           </Link>

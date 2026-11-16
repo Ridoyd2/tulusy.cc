@@ -1,23 +1,14 @@
-import type { Metadata } from 'next';
 import Link from 'next/link';
 import { LegalPageShell } from '@/components/LegalPageShell';
-import { CONTACT_EMAIL, SITE_DOMAIN, SITE_URL } from '@/lib/site';
+import { CONTACT_EMAIL, SITE_DOMAIN } from '@/lib/site';
+import { buildSeoMetadata } from '@/lib/toolsConfig';
 
-const title = 'Privacy Policy';
-const description = `Learn how ${SITE_DOMAIN} processes converted files, ephemeral 5GB file drops, IP lookups, and contact inquiries with zero retention.`;
-
-export const metadata: Metadata = {
-  title,
-  description,
-  alternates: { canonical: `${SITE_URL}/privacy` },
-  openGraph: {
-    title: `${title} | Tulusy`,
-    description,
-    url: `${SITE_URL}/privacy`,
-    siteName: 'Tulusy',
-    type: 'website',
-  },
-};
+export const metadata = buildSeoMetadata({
+  title: 'Privacy Policy',
+  description: `Learn how ${SITE_DOMAIN} processes converted files, ephemeral 5GB file drops, IP lookups, and contact inquiries with zero retention.`,
+  path: '/privacy',
+  card: 'summary',
+});
 
 export default function PrivacyPage() {
   return (
@@ -59,7 +50,11 @@ export default function PrivacyPage() {
           4. Local Browser Preferences & Contact
         </h2>
         <p>
-          Theme preference (`light` or `dark`) and local File Share history/delete tokens are stored solely in your browser&apos;s `localStorage` and can be cleared anytime. For privacy requests or takedown inquiries, contact{' '}
+          Theme preference (light or dark) and local File Share history/delete tokens are stored solely in your browser&apos;s{' '}
+          <code className="font-mono text-[11px] px-1 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-slate-800 dark:text-slate-200">
+            localStorage
+          </code>{' '}
+          and can be cleared anytime. For privacy requests or takedown inquiries, contact{' '}
           <a href={`mailto:${CONTACT_EMAIL}`} className="text-blue-600 dark:text-blue-400 hover:underline font-medium">
             {CONTACT_EMAIL}
           </a>{' '}
