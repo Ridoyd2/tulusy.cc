@@ -36,10 +36,10 @@ In **Cloudflare Dashboard -> R2 -> Bucket (`tulusy`) -> Settings -> CORS Policy*
 ---
 
 ## 4. Install the FastAPI Backend via SSH (`systemd`)
-SSH into your Hetzner VPS and run the setup script pointing to the directory where ServerAvatar cloned the repo (typically `/home/<app_user>/apps/<app_name>` or `/home/<app_user>/<app_name>`):
+SSH into your Hetzner VPS and run the setup script from the directory where ServerAvatar cloned the repo (typically `/home/<app_user>/apps/<app_name>` or `/home/<app_user>/<app_name>`; `setup-backend.sh` auto-detects `APP_ROOT` relative to `deploy/`):
 
 ```bash
-sudo bash /path/to/repo/deploy/setup-backend.sh /path/to/repo
+cd /path/to/repo && sudo bash deploy/setup-backend.sh
 ```
 
 Then edit `backend/.env` on the server:

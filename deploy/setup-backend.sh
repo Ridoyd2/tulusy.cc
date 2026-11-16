@@ -3,7 +3,8 @@ set -euo pipefail
 
 # Setup script for Tulusy FastAPI Backend on Ubuntu (Hetzner + ServerAvatar)
 # Usage:
-#   sudo bash deploy/setup-backend.sh /home/<serveravatar_user>/apps/<app_dir>
+#   cd /path/to/repo && sudo bash deploy/setup-backend.sh
+#   (Auto-detects the repo directory when run from inside the repo; optionally pass APP_ROOT and SERVICE_USER.)
 # Example:
 #   sudo bash deploy/setup-backend.sh /home/tulusy/apps/tulusy-cc
 
@@ -33,6 +34,10 @@ if [[ ! -f "$BACKEND_DIR/.env" ]]; then
   sudo -u "$SERVICE_USER" cp "$BACKEND_DIR/.env.example" "$BACKEND_DIR/.env"
   chmod 600 "$BACKEND_DIR/.env"
 fi
+
+echo "==> Ensuring runtime directories and ownership for $SERVICE_USER..."
+mkdir -p "$BACKEND_DIR/data/hosted_files" "$BACKEND_DIR/temp/uploads" "$BACKEND_DIR/temp/outputs"
+chown -R "$SERVICE_USER:$SERVICE_USER" "$BACKEND_DIR/data" "$BACKEND_DIR/temp" "$BACKEND_DIR/.env"
 
 echo "==> Installing systemd service /etc/systemd/system/tulusy-backend.service..."
 sed \

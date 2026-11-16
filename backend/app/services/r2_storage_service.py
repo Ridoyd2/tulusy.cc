@@ -257,6 +257,7 @@ def prepare_download(file_id: str, password: Optional[str] = None) -> Dict[str, 
         now = int(time.time())
         if row["expires_at"] <= now:
             cursor.execute("UPDATE hosted_files SET is_deleted = 1 WHERE id = ?", (file_id,))
+            conn.commit()
             raise ValueError("This file has expired and is no longer available.")
 
         if row["password_hash"]:
