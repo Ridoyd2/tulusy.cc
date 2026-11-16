@@ -118,6 +118,12 @@ const entries = [
     changefreq: 'weekly',
     priority: popularSlugs.has(slug) ? '0.9' : '0.8',
   })),
+  ...['/contact', '/privacy', '/terms'].map((staticPath) => ({
+    loc: `${SITE_URL}${staticPath}`,
+    lastmod,
+    changefreq: 'monthly',
+    priority: '0.5',
+  })),
 ];
 
 const sitemapXml = [

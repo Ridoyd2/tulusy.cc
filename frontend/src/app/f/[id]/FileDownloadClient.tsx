@@ -17,6 +17,7 @@ import {
 import { Navbar } from '@/components/Navbar';
 import { Footer } from '@/components/Footer';
 import { getApiBaseUrl } from '@/lib/api';
+import { CONTACT_EMAIL } from '@/lib/site';
 
 interface FileInfo {
   file_id: string;
@@ -360,8 +361,15 @@ export const FileDownloadClient: React.FC<{ initialFile: FileInfo | null; fileId
               </button>
             </div>
 
-            <p className="text-xs text-slate-500">
-              Describe why this file violates terms of service (copyright infringement, malware, or illegal content).
+            <p className="text-xs text-slate-500 dark:text-slate-400">
+              Describe why this file violates terms of service (copyright infringement, malware, or illegal content). For urgent DMCA notices, you can also email{' '}
+              <a
+                href={`mailto:${CONTACT_EMAIL}?subject=${encodeURIComponent(`DMCA / Abuse Report for /f/${fileId}`)}`}
+                className="text-blue-600 dark:text-blue-400 hover:underline font-mono"
+              >
+                {CONTACT_EMAIL}
+              </a>
+              .
             </p>
 
             <textarea

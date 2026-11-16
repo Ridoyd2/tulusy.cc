@@ -9,3 +9,6 @@ export const SITE_DOMAIN = (() => {
     return 'tulusy.cc';
   }
 })();
+
+export const CONTACT_EMAIL =
+  process.env.NEXT_PUBLIC_CONTACT_EMAIL || `admin@${SITE_DOMAIN}`;
