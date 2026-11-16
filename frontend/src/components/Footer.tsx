@@ -3,7 +3,7 @@
 import React from 'react';
 import Link from 'next/link';
 import { Shield } from 'lucide-react';
-import { ActiveTool } from './Navbar';
+import { ActiveTool, TOOL_LIST } from '@/lib/toolsConfig';
 import { TulusyLogo } from './TulusyLogo';
 import { SITE_DOMAIN } from '../lib/site';
 
@@ -12,29 +12,13 @@ interface FooterProps {
 }
 
 export const Footer: React.FC<FooterProps> = ({ onSelectTool }) => {
-  const handleNav = (tool: ActiveTool) => {
-    if (onSelectTool) {
-      onSelectTool(tool);
-      window.scrollTo({ top: 0, behavior: 'smooth' });
-    } else if (typeof window !== 'undefined') {
-      window.location.href = tool === 'converter' ? '/' : `/?tool=${tool}`;
-    }
-  };
-
-  const tools: { id: ActiveTool; label: string }[] = [
-    { id: 'converter', label: 'File Converter' },
-    { id: 'file-host', label: 'File Share (5GB)' },
-    { id: 'load-tester', label: 'HTTP Benchmark' },
-    { id: 'my-ip', label: 'IP Inspector' },
-    { id: 'da-checker', label: 'Domain Audit' },
-  ];
-
   const popularPairs = [
     { href: '/convert/png-to-webp', label: 'PNG to WebP' },
     { href: '/convert/pdf-to-docx', label: 'PDF to DOCX' },
     { href: '/convert/pdf-to-pptx', label: 'PDF to PPTX' },
     { href: '/convert/excel-to-pdf', label: 'Excel to PDF' },
     { href: '/convert/heic-to-jpg', label: 'HEIC to JPG' },
+    { href: '/convert', label: 'All Converters →' },
   ];
 
   return (
@@ -65,15 +49,19 @@ export const Footer: React.FC<FooterProps> = ({ onSelectTool }) => {
               Tools
             </h4>
             <ul className="space-y-2 text-xs">
-              {tools.map(tool => (
+              {TOOL_LIST.map(tool => (
                 <li key={tool.id}>
-                  <button
-                    type="button"
-                    onClick={() => handleNav(tool.id)}
-                    className="hover:text-slate-900 dark:hover:text-white transition-colors cursor-pointer text-left"
+                  <Link
+                    href={tool.href}
+                    onClick={() => {
+                      if (onSelectTool) {
+                        onSelectTool(tool.id);
+                      }
+                    }}
+                    className="hover:text-slate-900 dark:hover:text-white transition-colors"
                   >
-                    {tool.label}
-                  </button>
+                    {tool.footerLabel}
+                  </Link>
                 </li>
               ))}
             </ul>

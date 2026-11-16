@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useEffect, useState } from 'react';
+import Link from 'next/link';
 import {
   ArrowLeftRight,
   Sun,
@@ -11,11 +12,12 @@ import {
   HardDriveUpload
 } from 'lucide-react';
 import { TulusyLogo } from './TulusyLogo';
+import { ActiveTool, TOOL_ROUTES } from '@/lib/toolsConfig';
 
-export type ActiveTool = 'converter' | 'load-tester' | 'my-ip' | 'da-checker' | 'file-host';
+export type { ActiveTool };
 
 interface NavbarProps {
-  activeTool?: ActiveTool;
+  activeTool?: ActiveTool | null;
   onSelectTool?: (tool: ActiveTool) => void;
   onSelectQuickFilter?: (format: string, accept?: string, source?: string) => void;
 }
@@ -47,47 +49,39 @@ export const Navbar: React.FC<NavbarProps> = ({
     }
   };
 
-  const navTools: { id: ActiveTool; label: string; icon: React.ReactNode }[] = [
-    { id: 'converter', label: 'Converter', icon: <ArrowLeftRight className="w-3.5 h-3.5" /> },
-    { id: 'file-host', label: 'File Share', icon: <HardDriveUpload className="w-3.5 h-3.5" /> },
-    { id: 'load-tester', label: 'HTTP Benchmark', icon: <Activity className="w-3.5 h-3.5" /> },
-    { id: 'my-ip', label: 'IP Inspector', icon: <Globe className="w-3.5 h-3.5" /> },
-    { id: 'da-checker', label: 'Domain Audit', icon: <ShieldCheck className="w-3.5 h-3.5" /> },
+  const navTools: { id: ActiveTool; label: string; href: string; icon: React.ReactNode }[] = [
+    { id: 'converter', label: TOOL_ROUTES.converter.navLabel, href: TOOL_ROUTES.converter.href, icon: <ArrowLeftRight className="w-3.5 h-3.5" /> },
+    { id: 'file-host', label: TOOL_ROUTES['file-host'].navLabel, href: TOOL_ROUTES['file-host'].href, icon: <HardDriveUpload className="w-3.5 h-3.5" /> },
+    { id: 'load-tester', label: TOOL_ROUTES['load-tester'].navLabel, href: TOOL_ROUTES['load-tester'].href, icon: <Activity className="w-3.5 h-3.5" /> },
+    { id: 'my-ip', label: TOOL_ROUTES['my-ip'].navLabel, href: TOOL_ROUTES['my-ip'].href, icon: <Globe className="w-3.5 h-3.5" /> },
+    { id: 'da-checker', label: TOOL_ROUTES['da-checker'].navLabel, href: TOOL_ROUTES['da-checker'].href, icon: <ShieldCheck className="w-3.5 h-3.5" /> },
   ];
-
-  const handleToolClick = (toolId: ActiveTool) => {
-    if (onSelectTool) {
-      onSelectTool(toolId);
-    } else if (typeof window !== 'undefined') {
-      window.location.href = toolId === 'converter' ? '/' : `/?tool=${toolId}`;
-    }
-  };
 
   return (
     <header className="sticky top-0 z-40 w-full bg-white/90 dark:bg-slate-950/90 border-b border-slate-200/80 dark:border-slate-800/80 backdrop-blur-md">
       <div className="max-w-6xl mx-auto px-3 sm:px-6 lg:px-8">
         <div className="h-14 flex items-center justify-between gap-3">
           {/* Brand */}
-          <button
-            type="button"
-            onClick={() => handleToolClick('converter')}
+          <Link
+            href="/"
+            onClick={() => onSelectTool?.('converter')}
             className="flex items-center gap-2 cursor-pointer select-none shrink-0 text-left"
           >
             <TulusyLogo className="w-7 h-7 shrink-0" />
             <span className="text-sm sm:text-base font-semibold text-slate-900 dark:text-white tracking-tight">
               Tulusy
             </span>
-          </button>
+          </Link>
 
           {/* Navigation Tabs */}
           <nav className="flex items-center gap-0.5 bg-slate-100/90 dark:bg-slate-900 p-1 rounded-lg border border-slate-200/70 dark:border-slate-800 overflow-x-auto no-scrollbar">
             {navTools.map(tool => {
-              const isActive = activeTool === tool.id && Boolean(onSelectTool);
+              const isActive = activeTool === tool.id;
               return (
-                <button
+                <Link
                   key={tool.id}
-                  type="button"
-                  onClick={() => handleToolClick(tool.id)}
+                  href={tool.href}
+                  onClick={() => onSelectTool?.(tool.id)}
                   className={`px-2.5 sm:px-3 py-1.5 rounded-md flex items-center gap-1.5 text-xs font-medium transition-all cursor-pointer whitespace-nowrap ${
                     isActive
                       ? 'bg-white dark:bg-slate-800 text-slate-900 dark:text-white shadow-2xs border border-slate-200/60 dark:border-slate-700/80'
@@ -96,7 +90,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                 >
                   {tool.icon}
                   <span>{tool.label}</span>
-                </button>
+                </Link>
               );
             })}
           </nav>

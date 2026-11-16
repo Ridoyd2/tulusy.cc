@@ -199,15 +199,15 @@ export function getCompatibleTargets(sourceExt: string): FormatOption[] {
   const ext = sourceExt.toLowerCase().replace('.', '');
   
   if (['png', 'jpg', 'jpeg', 'webp', 'avif', 'bmp', 'tiff', 'gif', 'heic', 'heif', 'psd', 'tga', 'svg', 'ico'].includes(ext)) {
-    // Images convert to any other image, vector, icon, or PDF
+    // Images convert to any other supported output image, vector, icon, or PDF (PSD is input-only)
     return ALL_FORMATS.filter(
-      f => f.ext !== ext && (['image', 'vector', 'icon'].includes(f.category) || f.ext === 'pdf')
+      f => f.ext !== ext && f.ext !== 'psd' && (['image', 'vector', 'icon'].includes(f.category) || f.ext === 'pdf')
     );
   }
   
   if (ext === 'pdf') {
-    // PDF can convert to DOCX, PPTX, XLSX, CSV, TXT, or Image formats
-    return ALL_FORMATS.filter(f => f.ext !== 'pdf');
+    // PDF can convert to DOCX, PPTX, XLSX, CSV, TXT, or output Image formats (PSD is input-only)
+    return ALL_FORMATS.filter(f => f.ext !== 'pdf' && f.ext !== 'psd');
   }
 
   if (['xlsx', 'xls'].includes(ext)) {
@@ -231,5 +231,5 @@ export function getCompatibleTargets(sourceExt: string): FormatOption[] {
   }
 
   // Fallback
-  return ALL_FORMATS.filter(f => f.ext !== ext);
+  return ALL_FORMATS.filter(f => f.ext !== ext && f.ext !== 'psd');
 }

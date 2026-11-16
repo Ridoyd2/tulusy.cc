@@ -295,7 +295,7 @@ export const FileDownloadClient: React.FC<{ initialFile: FileInfo | null; fileId
 
             {/* Footer actions */}
             <div className="pt-2 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between text-[11px] text-slate-500">
-              <Link href="/?tool=file-host" className="hover:text-slate-900 dark:hover:text-white transition-colors">
+              <Link href="/share" className="hover:text-slate-900 dark:hover:text-white transition-colors">
                 Upload a file
               </Link>
               <button
@@ -324,7 +324,7 @@ export const FileDownloadClient: React.FC<{ initialFile: FileInfo | null; fileId
             </div>
             <div className="pt-2">
               <Link
-                href="/?tool=file-host"
+                href="/share"
                 className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-slate-900 hover:bg-slate-800 dark:bg-white dark:hover:bg-slate-100 text-white dark:text-slate-900 font-medium text-xs sm:text-sm transition-colors"
               >
                 <span>Share a File</span>

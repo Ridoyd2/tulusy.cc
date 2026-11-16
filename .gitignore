@@ -23,6 +23,8 @@ frontend/out/
 frontend/build/
 frontend/*.tsbuildinfo
 frontend/next-env.d.ts
+frontend/public/sitemap.xml
+frontend/public/robots.txt
 
 # Logs & OS artifacts
 *.log

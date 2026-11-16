@@ -3,7 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
+    "predev": "node scripts/generate-seo-files.mjs",
     "dev": "next dev --webpack",
+    "prebuild": "node scripts/generate-seo-files.mjs",
     "build": "next build --webpack",
     "start": "next start -p 3480",
     "lint": "eslint"

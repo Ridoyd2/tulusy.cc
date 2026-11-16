@@ -385,6 +385,32 @@ const SEO_SLUG_ALIASES: Record<string, string> = {
   'pdf-to-word': 'pdf-to-docx',
 };
 
+const FORMAT_EXT_ALIASES: Record<string, string> = {
+  jpeg: 'jpg',
+  heif: 'heic',
+  tif: 'tiff',
+  doc: 'docx',
+  ppt: 'pptx',
+  xls: 'xlsx',
+  word: 'docx',
+  excel: 'xlsx',
+};
+
+function normalizeFormatToken(token: string): string {
+  const lower = token.toLowerCase();
+  return FORMAT_EXT_ALIASES[lower] || lower;
+}
+
+export function resolveCanonicalSlug(slug: string): string {
+  const lower = slug.toLowerCase();
+  const aliased = SEO_SLUG_ALIASES[lower] || lower;
+  const match = aliased.match(/^([a-z0-9]+)-to-([a-z0-9]+)$/);
+  if (!match) return aliased;
+
+  const normSlug = `${normalizeFormatToken(match[1])}-to-${normalizeFormatToken(match[2])}`;
+  return SEO_SLUG_ALIASES[normSlug] || normSlug;
+}
+
 const DEVELOPER_MAP: Record<string, string> = {
   png: 'PNG Development Group / W3C',
   jpg: 'Joint Photographic Experts Group (ISO/IEC)',
@@ -407,8 +433,7 @@ const DEVELOPER_MAP: Record<string, string> = {
 };
 
 export function getSEOPair(slug: string): FormatPairSEO | undefined {
-  const lower = slug.toLowerCase();
-  const canonical = SEO_SLUG_ALIASES[lower] || lower;
+  const canonical = resolveCanonicalSlug(slug);
   const predefined = POPULAR_SEO_PAIRS.find(p => p.slug.toLowerCase() === canonical);
   if (predefined) return predefined;
 
@@ -474,5 +499,56 @@ export function getSEOPair(slug: string): FormatPairSEO | undefined {
 }
 
 export function getAllSEOSlugs(): string[] {
-  return POPULAR_SEO_PAIRS.map(p => p.slug);
+  const seen = new Set<string>(POPULAR_SEO_PAIRS.map(p => p.slug));
+
+  for (const src of ALL_FORMATS) {
+    for (const tgt of getCompatibleTargets(src.ext)) {
+      const canonical = resolveCanonicalSlug(`${src.ext}-to-${tgt.ext}`);
+      seen.add(canonical);
+    }
+  }
+
+  return Array.from(seen);
+}
+
+export interface ConverterDirectoryGroup {
+  id: string;
+  title: string;
+  description: string;
+  pairs: FormatPairSEO[];
+}
+
+export function getConverterDirectoryGroups(): ConverterDirectoryGroup[] {
+  const allPairs = getAllSEOSlugs()
+    .map(slug => getSEOPair(slug))
+    .filter((pair): pair is FormatPairSEO => Boolean(pair));
+
+  const pdfPairs = allPairs.filter(p => p.source === 'pdf' || p.target === 'pdf');
+  const documentPairs = allPairs.filter(
+    p => p.source !== 'pdf' && p.target !== 'pdf' && ['docx', 'pptx', 'xlsx', 'csv', 'txt'].includes(p.source)
+  );
+  const imagePairs = allPairs.filter(
+    p => p.source !== 'pdf' && p.target !== 'pdf' && !['docx', 'pptx', 'xlsx', 'csv', 'txt'].includes(p.source)
+  );
+
+  return [
+    {
+      id: 'pdf',
+      title: 'PDF Conversion Tools',
+      description: 'Convert PDFs to editable Word, PowerPoint, Excel, CSV, text, or images, and turn documents or graphics into PDF.',
+      pairs: pdfPairs,
+    },
+    {
+      id: 'documents',
+      title: 'Word, Presentation & Spreadsheet Tools',
+      description: 'Transform DOCX, PPTX, XLSX, CSV, and TXT files cleanly without installing office suites.',
+      pairs: documentPairs,
+    },
+    {
+      id: 'images',
+      title: 'Image, Vector & Icon Converters',
+      description: 'Convert between PNG, JPG, WebP, AVIF, HEIC, SVG, ICO, GIF, TIFF, BMP, PSD, and TGA.',
+      pairs: imagePairs,
+    },
+  ];
 }

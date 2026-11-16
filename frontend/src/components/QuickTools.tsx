@@ -1,6 +1,7 @@
 'use client';
 
 import React from 'react';
+import Link from 'next/link';
 import { ArrowRight, Image as ImageIcon, FileText, Presentation, Layers, Table, FileSpreadsheet } from 'lucide-react';
 
 interface QuickToolsProps {
@@ -77,13 +78,22 @@ export const QuickTools: React.FC<QuickToolsProps> = ({ onPresetSelected }) => {
 
   return (
     <section className="w-full space-y-3.5">
-      <div>
-        <h3 className="text-sm sm:text-base font-semibold text-slate-900 dark:text-white">
-          Direct Workflows
-        </h3>
-        <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-          Select a workflow to pre-configure target format and open the file selector
-        </p>
+      <div className="flex items-end justify-between gap-3">
+        <div>
+          <h3 className="text-sm sm:text-base font-semibold text-slate-900 dark:text-white">
+            Direct Workflows
+          </h3>
+          <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+            Select a workflow to pre-configure target format and open the file selector
+          </p>
+        </div>
+        <Link
+          href="/convert"
+          className="text-xs font-medium text-blue-600 dark:text-blue-400 hover:underline whitespace-nowrap shrink-0 inline-flex items-center gap-1"
+        >
+          <span>All converters</span>
+          <ArrowRight className="w-3 h-3" />
+        </Link>
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">

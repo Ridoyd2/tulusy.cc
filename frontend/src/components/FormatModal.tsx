@@ -33,7 +33,7 @@ export const FormatModal: React.FC<FormatModalProps> = ({
 
   const baseFormats = useMemo(() => {
     if (mode === 'source') return ALL_FORMATS;
-    return sourceExt ? getCompatibleTargets(sourceExt) : ALL_FORMATS;
+    return sourceExt ? getCompatibleTargets(sourceExt) : ALL_FORMATS.filter(f => f.ext !== 'psd');
   }, [sourceExt, mode]);
 
   const availableCategories = useMemo(() => {

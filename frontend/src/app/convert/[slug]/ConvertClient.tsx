@@ -11,7 +11,7 @@ import { Footer } from '@/components/Footer';
 import { FileItem, ConversionSettings } from '@/types';
 import { convertSingleFile, mergeImagesToPdf, downloadBlob } from '@/lib/api';
 import { DEFAULT_TARGET_FORMATS, getCompatibleTargets } from '@/lib/formatRegistry';
-import { FormatPairSEO, POPULAR_SEO_PAIRS } from '@/lib/seoData';
+import { FormatPairSEO, POPULAR_SEO_PAIRS, resolveCanonicalSlug } from '@/lib/seoData';
 import { ArrowRight, ChevronDown } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
@@ -298,7 +298,7 @@ export const ConvertClient: React.FC<ConvertClientProps> = ({ seoData }) => {
 
   return (
     <div className="min-h-screen flex flex-col">
-      <Navbar />
+      <Navbar activeTool="converter" />
 
       <main className="flex-1 max-w-5xl w-full mx-auto px-3 sm:px-6 lg:px-8 pt-6 sm:pt-10 pb-16 space-y-12">
         {/* Breadcrumb Navigation */}
@@ -307,7 +307,9 @@ export const ConvertClient: React.FC<ConvertClientProps> = ({ seoData }) => {
             Home
           </Link>
           <span>/</span>
-          <span className="text-slate-400">Convert</span>
+          <Link href="/convert" className="hover:text-slate-900 dark:hover:text-white transition-colors">
+            Convert
+          </Link>
           <span>/</span>
           <span className="font-medium text-slate-800 dark:text-slate-200">
             {seoData.source.toUpperCase()} to {seoData.target.toUpperCase()}
@@ -332,7 +334,15 @@ export const ConvertClient: React.FC<ConvertClientProps> = ({ seoData }) => {
               targetFormat={seoData.target}
               onClickSource={() => setHeroPickerMode('source')}
               onClickTarget={() => setHeroPickerMode('target')}
-              onSwap={() => router.push(`/convert/${seoData.target}-to-${seoData.source}`)}
+              onSwap={() => {
+                const compat = getCompatibleTargets(seoData.target);
+                const nextTarget = compat.some(f => f.ext === seoData.source)
+                  ? seoData.source
+                  : DEFAULT_TARGET_FORMATS[seoData.target] || compat[0]?.ext;
+                if (nextTarget) {
+                  router.push(`/convert/${resolveCanonicalSlug(`${seoData.target}-to-${nextTarget}`)}`);
+                }
+              }}
             />
 
             <Dropzone
@@ -488,10 +498,17 @@ export const ConvertClient: React.FC<ConvertClientProps> = ({ seoData }) => {
 
         {/* Related Conversions Grid */}
         <section className="space-y-3.5 pt-6 border-t border-slate-200 dark:border-slate-800">
-          <div>
+          <div className="flex items-center justify-between gap-3">
             <h3 className="text-sm sm:text-base font-semibold text-slate-900 dark:text-white">
               Related Format Converters
             </h3>
+            <Link
+              href="/convert"
+              className="text-xs font-medium text-blue-600 dark:text-blue-400 hover:underline inline-flex items-center gap-1"
+            >
+              <span>All converters</span>
+              <ArrowRight className="w-3 h-3" />
+            </Link>
           </div>
 
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
@@ -543,9 +560,9 @@ export const ConvertClient: React.FC<ConvertClientProps> = ({ seoData }) => {
             const nextTarget = compat.some(f => f.ext === seoData.target)
               ? seoData.target
               : DEFAULT_TARGET_FORMATS[cleanFmt] || compat[0]?.ext || 'webp';
-            router.push(`/convert/${cleanFmt}-to-${nextTarget}`);
+            router.push(`/convert/${resolveCanonicalSlug(`${cleanFmt}-to-${nextTarget}`)}`);
           } else {
-            router.push(`/convert/${seoData.source}-to-${cleanFmt}`);
+            router.push(`/convert/${resolveCanonicalSlug(`${seoData.source}-to-${cleanFmt}`)}`);
           }
         }}
         sourceExt={heroPickerMode === 'target' ? seoData.source : undefined}
