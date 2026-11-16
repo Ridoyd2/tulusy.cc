@@ -17,6 +17,7 @@ from app.services.r2_storage_service import (
     HOSTING_DIR,
     MAX_HOSTING_FILE_SIZE,
     cleanup_expired_files_job,
+    complete_multipart_session,
     confirm_upload_session,
     create_upload_session,
     delete_hosted_file,
@@ -224,6 +225,37 @@ class TestFileHosting(unittest.TestCase):
             # 4. Reporting non-existent file ID returns 404
             rep_404 = client.post("/api/hosting/report/NON_EXISTENT_ID_999", json={"reason": "Invalid fake target ID check"})
             self.assertEqual(rep_404.status_code, 404)
+
+    def test_complete_multipart_client_error_and_double_confirm_guard(self):
+        """Multipart completion handles R2 ClientError cleanly and blocks duplicate completion."""
+        fake_r2 = MagicMock()
+        fake_r2.create_multipart_upload.return_value = {"UploadId": "up_123"}
+        fake_r2.generate_presigned_url.return_value = "https://r2.example.invalid/part"
+        fake_r2.complete_multipart_upload.side_effect = ClientError(
+            {"Error": {"Code": "InvalidPart", "Message": "Bad ETag"}},
+            "CompleteMultipartUpload",
+        )
+        with patch("app.services.r2_storage_service.get_r2_client", return_value=fake_r2):
+            session = create_upload_session(
+                filename="large_archive.zip",
+                file_size=70 * 1024 * 1024,
+                auto_confirm=False,
+                use_multipart=True,
+            )
+            fid = session["file_id"]
+            self.created_ids.append(fid)
+            self.assertEqual(session["upload_mode"], "multipart")
+
+            with self.assertRaises(ValueError):
+                complete_multipart_session(fid, "up_123", [{"PartNumber": 1, "ETag": '"bad"'}])
+
+            # Succeed once, then reject duplicate completion
+            fake_r2.complete_multipart_upload.side_effect = None
+            fake_r2.head_object.return_value = {"ContentLength": 70 * 1024 * 1024}
+            meta = complete_multipart_session(fid, "up_123", [{"PartNumber": 1, "ETag": '"ok"'}])
+            self.assertEqual(meta["file_size"], 70 * 1024 * 1024)
+            with self.assertRaises(ValueError):
+                complete_multipart_session(fid, "up_123", [{"PartNumber": 1, "ETag": '"ok"'}])
 
 
 if __name__ == "__main__":

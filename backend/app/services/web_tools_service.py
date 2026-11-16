@@ -705,7 +705,7 @@ async def analyze_website_da(domain_or_url: str) -> Dict[str, Any]:
         raise ValueError(f"Could not connect to website: {sanitize_error_msg(str(e))}")
 
     if shield.get("proxied"):
-        is_https = final_url.startswith("https://") or target_url.startswith("https://")
+        is_https = final_url.startswith("https://")
         relay_err = response_headers.get("x-relay-error", "")
         if not is_https:
             ssl_info = {
@@ -822,7 +822,11 @@ async def analyze_website_da(domain_or_url: str) -> Dict[str, Any]:
                     r_text = r_body.decode("utf-8", errors="replace")
                     if r_status == 200 and len(r_text) > 5 and not r_text.strip().lower().startswith("<!doctype"):
                         robots_ok = True
-                        declared_sitemaps.extend(re.findall(r"(?im)^\s*sitemap:\s*(\S+)", r_text))
+                        base_root = f"{proto}://{hostname}/"
+                        declared_sitemaps.extend(
+                            urljoin(base_root, sm.strip())
+                            for sm in re.findall(r"(?im)^\s*sitemap:\s*(\S+)", r_text)
+                        )
                 except Exception:
                     pass
 

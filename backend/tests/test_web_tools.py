@@ -126,7 +126,15 @@ async def test_suite():
             res_ok = await analyze_website_da("example.com")
             assert res_ok["ssl"]["valid"] is True
             assert res_ok["ssl"]["days_left"] is None, "Relayed HTTPS should set days_left=None rather than fabricating 90"
-    print("[PASS] Proxied Relay 526 TLS invalid & verified neutral days_left verified")
+
+        async def mock_downgrade_relay(*args, **kwargs):
+            return 200, {}, b"<html><title>Downgraded</title></html>", "http://example.com", "HTTP/1.1"
+
+        with patch("app.services.web_tools_service._safe_fetch_with_redirects", side_effect=mock_downgrade_relay):
+            res_down = await analyze_website_da("https://example.com")
+            assert res_down["ssl"]["valid"] is False, "HTTPS->HTTP downgrade must not claim valid SSL"
+            assert res_down["ssl"]["issuer"] == "No HTTPS"
+    print("[PASS] Proxied Relay 526 TLS invalid, downgrade handling, & neutral days_left verified")
 
     # 7. Test My-IP Sensitive Header Redaction
     print("\n--- 7. Testing My-IP Header Redaction ---")

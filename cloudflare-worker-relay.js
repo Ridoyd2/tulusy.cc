@@ -51,7 +51,14 @@ function isPrivateOrBlockedHost(hostname) {
   if (/^172\.(1[6-9]|2\d|3[01])\./.test(host)) {
     return true;
   }
-  if (host.startsWith('fc') || host.startsWith('fd') || host.startsWith('fe80')) {
+  if (
+    host.includes(':') &&
+    (host === '::' ||
+      host === '::1' ||
+      /^(fc|fd)[0-9a-f]{0,2}:/.test(host) ||
+      /^fe[89ab][0-9a-f]:/.test(host) ||
+      /^::ffff:(127\.|10\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.|0\.)/.test(host))
+  ) {
     return true;
   }
   return false;

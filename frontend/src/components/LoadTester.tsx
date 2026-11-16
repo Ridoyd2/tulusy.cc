@@ -328,7 +328,8 @@ export const LoadTester: React.FC = () => {
                     Opaque (Reachable)
                   </p>
                   <p className="text-[11px] text-slate-400 font-mono tabular-nums truncate">
-                    {results.opaque_responses}/{results.total_requests} No-CORS · Status hidden
+                    {results.opaque_responses}/{results.total_requests} No-CORS
+                    {results.failed_requests > 0 ? ` · ${results.failed_requests} err` : ' · Status hidden'}
                   </p>
                 </>
               ) : (

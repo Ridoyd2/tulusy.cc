@@ -332,6 +332,8 @@ def complete_multipart_session(file_id: str, upload_id: str, parts: List[Dict[st
             raise ValueError("Upload session not found or expired.")
         if row["storage_type"] != "r2":
             raise ValueError("Multipart upload is only valid for R2 storage sessions.")
+        if row["upload_confirmed"] == 1:
+            raise ValueError("Upload session is already confirmed.")
         if row["expires_at"] <= int(time.time()):
             raise ValueError("Upload session has expired.")
         storage_key = row["storage_key"]
@@ -344,12 +346,15 @@ def complete_multipart_session(file_id: str, upload_id: str, parts: List[Dict[st
         [{"PartNumber": int(p["PartNumber"]), "ETag": str(p["ETag"])} for p in parts],
         key=lambda p: p["PartNumber"],
     )
-    r2_client.complete_multipart_upload(
-        Bucket=R2_BUCKET_NAME,
-        Key=storage_key,
-        UploadId=upload_id,
-        MultipartUpload={"Parts": sorted_parts},
-    )
+    try:
+        r2_client.complete_multipart_upload(
+            Bucket=R2_BUCKET_NAME,
+            Key=storage_key,
+            UploadId=upload_id,
+            MultipartUpload={"Parts": sorted_parts},
+        )
+    except ClientError as ce:
+        raise ValueError(f"Failed to finalize multipart upload in R2 storage: {ce}")
     return confirm_upload_session(file_id)
 
 
