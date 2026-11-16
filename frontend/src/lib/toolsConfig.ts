@@ -1,5 +1,5 @@
 import type { Metadata } from 'next';
-import { OG_IMAGE, SITE_URL } from './site';
+import { SITE_URL } from './site';
 
 export type ActiveTool = 'converter' | 'file-host' | 'load-tester' | 'my-ip' | 'da-checker';
 
@@ -205,13 +205,11 @@ export function buildSeoMetadata({
       url: canonicalUrl,
       siteName: 'Tulusy',
       type: 'website',
-      images: [OG_IMAGE],
     },
     twitter: {
       card,
       title: socialTitle,
       description,
-      images: [OG_IMAGE.url],
     },
   };
 }

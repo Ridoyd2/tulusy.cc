@@ -4,7 +4,7 @@ import { ArrowRight } from 'lucide-react';
 import { Navbar } from '@/components/Navbar';
 import { Footer } from '@/components/Footer';
 import { getConverterDirectoryGroups, getAllSEOSlugs } from '@/lib/seoData';
-import { OG_IMAGE, SITE_URL } from '@/lib/site';
+import { SITE_URL } from '@/lib/site';
 
 const totalPairs = getAllSEOSlugs().length;
 const directoryTitle = `All File Converters - ${totalPairs}+ Free Tools`;
@@ -29,13 +29,11 @@ export const metadata: Metadata = {
     url: `${SITE_URL}/convert`,
     siteName: 'Tulusy',
     type: 'website',
-    images: [OG_IMAGE],
   },
   twitter: {
     card: 'summary_large_image',
     title: `${directoryTitle} | Tulusy`,
     description: directoryDescription,
-    images: [OG_IMAGE.url],
   },
 };
 
