@@ -1,6 +1,7 @@
 'use client';
 
-import React, { useState, useRef, useSyncExternalStore } from 'react';
+import React, { useState, useRef, useMemo, useSyncExternalStore } from 'react';
+import QRCode from 'qrcode';
 import {
   HardDriveUpload,
   Shield,
@@ -21,6 +22,78 @@ import {
 } from 'lucide-react';
 import { getApiBaseUrl } from '../lib/api';
 import { SITE_URL } from '../lib/site';
+import { UploadSessionData } from '../types';
+
+const MULTIPART_THRESHOLD_BYTES = 64 * 1024 * 1024;
+const MULTIPART_CONCURRENCY = 3;
+
+function LocalQrSvg({ value }: { value: string }) {
+  const { size, path } = useMemo(() => {
+    const qr = QRCode.create(value, { errorCorrectionLevel: 'M' });
+    const count = qr.modules.size;
+    let d = '';
+    for (let r = 0; r < count; r++) {
+      for (let c = 0; c < count; c++) {
+        if (qr.modules.get(r, c)) {
+          d += `M${c} ${r}h1v1h-1z`;
+        }
+      }
+    }
+    return { size: count + 4, path: d };
+  }, [value]);
+
+  return (
+    <svg
+      viewBox={`-2 -2 ${size} ${size}`}
+      className="w-36 h-36 rounded-lg bg-white p-2 border border-slate-200"
+      role="img"
+      aria-label="Download QR Code"
+    >
+      <path d={path} fill="#0f172a" />
+    </svg>
+  );
+}
+
+function uploadBlobViaXhr(
+  method: 'PUT' | 'POST',
+  url: string,
+  body: XMLHttpRequestBodyInit,
+  options?: {
+    contentType?: string;
+    onProgress?: (loaded: number, total: number) => void;
+  }
+): Promise<string | null> {
+  return new Promise<string | null>((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open(method, url);
+    if (options?.contentType) {
+      xhr.setRequestHeader('Content-Type', options.contentType);
+    }
+
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable && options?.onProgress) {
+        options.onProgress(e.loaded, e.total);
+      }
+    };
+
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        resolve(xhr.getResponseHeader('ETag') || xhr.getResponseHeader('etag'));
+      } else {
+        let msg = `Upload failed with status ${xhr.status}`;
+        try {
+          const parsed = JSON.parse(xhr.responseText) as { detail?: string };
+          if (parsed.detail) msg = parsed.detail;
+        } catch {}
+        reject(new Error(msg));
+      }
+    };
+
+    xhr.onerror = () => reject(new Error('Network error during file upload.'));
+    xhr.ontimeout = () => reject(new Error('Upload timed out.'));
+    xhr.send(body);
+  });
+}
 
 interface UploadResult {
   fileId: string;
@@ -205,15 +278,16 @@ export const FileHostTool: React.FC = () => {
           expiry_hours: selectedExpiry.hours ?? null,
           max_downloads: selectedExpiry.burn ? 1 : 0,
           password: password.trim() ? password.trim() : null,
+          use_multipart: file.size > MULTIPART_THRESHOLD_BYTES,
         }),
       });
 
       if (!initResp.ok) {
-        const errData = await initResp.json().catch(() => ({}));
+        const errData = (await initResp.json().catch(() => ({}))) as { detail?: string };
         throw new Error(errData.detail || 'Failed to initialize upload session');
       }
 
-      const initData = await initResp.json();
+      const initData = (await initResp.json()) as { data: UploadSessionData };
       const session = initData.data;
 
       // 2. Perform direct upload with real-time progress
@@ -221,75 +295,124 @@ export const FileHostTool: React.FC = () => {
         session.storage_type === 'r2' ? 'Uploading directly to Cloudflare R2...' : 'Uploading file...'
       );
 
-      const startTime = Date.now();
       let lastLoaded = 0;
-      let lastTime = startTime;
+      let lastTime = Date.now();
+      const reportProgress = (loadedBytes: number) => {
+        const percent = Math.min(100, Math.round((loadedBytes / file.size) * 100));
+        setProgress(percent);
+        const now = Date.now();
+        const timeDiff = (now - lastTime) / 1000;
+        if (timeDiff >= 0.4) {
+          const speedBytesPerSec = (loadedBytes - lastLoaded) / timeDiff;
+          if (speedBytesPerSec > 0) {
+            setUploadSpeed(`${formatBytes(speedBytesPerSec)}/s`);
+          }
+          lastLoaded = loadedBytes;
+          lastTime = now;
+        }
+      };
 
-      await new Promise<void>((resolve, reject) => {
-        const xhr = new XMLHttpRequest();
+      if (
+        session.upload_mode === 'multipart' &&
+        session.upload_id &&
+        session.part_size &&
+        session.parts?.length
+      ) {
+        const parts = session.parts;
+        const partSize = session.part_size;
+        const uploadId = session.upload_id;
+        const loadedByPart = new Array<number>(parts.length).fill(0);
+        const completedParts: Array<{ PartNumber: number; ETag: string }> = new Array(parts.length);
+        let cursor = 0;
+
+        const uploadSinglePart = async (partIdx: number) => {
+          const part = parts[partIdx];
+          const start = (part.part_number - 1) * partSize;
+          const end = Math.min(start + partSize, file.size);
+          const chunk = file.slice(start, end);
+
+          for (let attempt = 0; attempt < 3; attempt++) {
+            try {
+              const etag = await uploadBlobViaXhr('PUT', part.upload_url, chunk, {
+                onProgress: (loaded) => {
+                  loadedByPart[partIdx] = loaded;
+                  reportProgress(loadedByPart.reduce((a, b) => a + b, 0));
+                },
+              });
+              if (!etag) {
+                throw new Error('R2 upload response missing ETag header.');
+              }
+              loadedByPart[partIdx] = chunk.size;
+              reportProgress(loadedByPart.reduce((a, b) => a + b, 0));
+              completedParts[partIdx] = { PartNumber: part.part_number, ETag: etag };
+              return;
+            } catch (partErr) {
+              if (attempt === 2) throw partErr;
+              loadedByPart[partIdx] = 0;
+              await new Promise(r => setTimeout(r, 600 * (attempt + 1)));
+            }
+          }
+        };
+
+        try {
+          const workers = Array.from(
+            { length: Math.min(MULTIPART_CONCURRENCY, parts.length) },
+            async () => {
+              while (cursor < parts.length) {
+                const idx = cursor++;
+                await uploadSinglePart(idx);
+              }
+            }
+          );
+          await Promise.all(workers);
+
+          setStatusMessage('Finalizing multipart upload...');
+          const completeResp = await fetch(`${apiUrl}/api/hosting/complete-multipart/${session.file_id}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ upload_id: uploadId, parts: completedParts }),
+          });
+          if (!completeResp.ok) {
+            const errData = (await completeResp.json().catch(() => ({}))) as { detail?: string };
+            throw new Error(errData.detail || 'Could not finalize multipart upload');
+          }
+        } catch (mpErr) {
+          await fetch(`${apiUrl}/api/hosting/abort-multipart/${session.file_id}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ upload_id: uploadId }),
+          }).catch(() => {});
+          throw mpErr;
+        }
+      } else {
         const uploadUrl = session.upload_url.startsWith('http')
           ? session.upload_url
           : `${apiUrl}${session.upload_url}`;
 
         const method = session.storage_type === 'r2' ? 'PUT' : 'POST';
-        xhr.open(method, uploadUrl);
-
+        let body: XMLHttpRequestBodyInit;
         if (session.storage_type === 'r2') {
-          xhr.setRequestHeader('Content-Type', file.type || 'application/octet-stream');
-        }
-
-        xhr.upload.onprogress = (e) => {
-          if (e.lengthComputable) {
-            const percent = Math.round((e.loaded / e.total) * 100);
-            setProgress(percent);
-
-            const now = Date.now();
-            const timeDiff = (now - lastTime) / 1000;
-            if (timeDiff >= 0.4) {
-              const bytesDiff = e.loaded - lastLoaded;
-              const speedBytesPerSec = bytesDiff / timeDiff;
-              if (speedBytesPerSec > 0) {
-                setUploadSpeed(`${formatBytes(speedBytesPerSec)}/s`);
-              }
-              lastLoaded = e.loaded;
-              lastTime = now;
-            }
-          }
-        };
-
-        xhr.onload = () => {
-          if (xhr.status >= 200 && xhr.status < 300) {
-            resolve();
-          } else {
-            let msg = `Upload failed with status ${xhr.status}`;
-            try {
-              const parsed = JSON.parse(xhr.responseText);
-              if (parsed.detail) msg = parsed.detail;
-            } catch {}
-            reject(new Error(msg));
-          }
-        };
-
-        xhr.onerror = () => reject(new Error('Network error during file upload.'));
-        xhr.ontimeout = () => reject(new Error('Upload timed out.'));
-
-        if (session.storage_type === 'r2') {
-          xhr.send(file);
+          body = file;
         } else {
           const formData = new FormData();
           formData.append('file', file);
-          xhr.send(formData);
+          body = formData;
         }
-      });
 
-      // 3. Confirm upload
-      setStatusMessage('Finalizing metadata...');
-      const confirmResp = await fetch(`${apiUrl}/api/hosting/confirm-upload/${session.file_id}`, {
-        method: 'POST',
-      });
-      if (!confirmResp.ok) {
-        const errData = await confirmResp.json().catch(() => ({}));
-        throw new Error(errData.detail || 'Could not verify uploaded file');
+        await uploadBlobViaXhr(method, uploadUrl, body, {
+          contentType: session.storage_type === 'r2' ? file.type || 'application/octet-stream' : undefined,
+          onProgress: (loaded) => reportProgress(loaded),
+        });
+
+        // 3. Confirm upload
+        setStatusMessage('Finalizing metadata...');
+        const confirmResp = await fetch(`${apiUrl}/api/hosting/confirm-upload/${session.file_id}`, {
+          method: 'POST',
+        });
+        if (!confirmResp.ok) {
+          const errData = (await confirmResp.json().catch(() => ({}))) as { detail?: string };
+          throw new Error(errData.detail || 'Could not verify uploaded file');
+        }
       }
 
       const origin = typeof window !== 'undefined' ? window.location.origin : SITE_URL;
@@ -316,9 +439,11 @@ export const FileHostTool: React.FC = () => {
       setFile(null);
       setConfirmDelete(false);
       setIsUploading(false);
-    } catch (err: any) {
+    } catch (err: unknown) {
       setIsUploading(false);
-      setErrorMessage(err.message || 'An unexpected error occurred during upload.');
+      setErrorMessage(
+        err instanceof Error ? err.message : 'An unexpected error occurred during upload.'
+      );
     }
   };
 
@@ -695,11 +820,7 @@ export const FileHostTool: React.FC = () => {
 
             {showQr && (
               <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-800 flex flex-col items-center justify-center gap-2 text-center">
-                <img
-                  src={`https://api.qrserver.com/v1/create-qr-code/?size=160x160&data=${encodeURIComponent(result.shareUrl)}`}
-                  alt="Download QR Code"
-                  className="w-36 h-36 rounded-lg bg-white p-2 border border-slate-200"
-                />
+                <LocalQrSvg value={result.shareUrl} />
                 <p className="text-[11px] text-slate-500">Scan to open download link on mobile</p>
               </div>
             )}

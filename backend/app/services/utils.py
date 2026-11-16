@@ -41,7 +41,7 @@ async def save_upload_file(upload_file: UploadFile, destination: Path) -> Path:
                     raise ValueError(
                         f"File '{safe_filename}' exceeds the maximum converter file size limit ({MAX_FILE_SIZE // (1024 * 1024)}MB)."
                     )
-                buffer.write(content)
+                await asyncio.to_thread(buffer.write, content)
     except Exception:
         target_path.unlink(missing_ok=True)
         raise

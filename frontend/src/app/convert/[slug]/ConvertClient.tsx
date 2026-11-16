@@ -1,15 +1,14 @@
 'use client';
 
-import React, { useState, useCallback, useEffect, useRef } from 'react';
+import React, { useState, useRef } from 'react';
 import { Navbar } from '@/components/Navbar';
-import { Dropzone } from '@/components/Dropzone';
+import { Dropzone, DropzoneHandle } from '@/components/Dropzone';
 import { FileQueue } from '@/components/FileQueue';
 import { FormatModal } from '@/components/FormatModal';
 import { FormatPairSelector } from '@/components/FormatPairSelector';
 import { SettingsModal } from '@/components/SettingsModal';
 import { Footer } from '@/components/Footer';
-import { FileItem, ConversionSettings } from '@/types';
-import { convertSingleFile, mergeImagesToPdf, downloadBlob } from '@/lib/api';
+import { DEFAULT_CONVERSION_SETTINGS, useConversionQueue } from '@/hooks/useConversionQueue';
 import { DEFAULT_TARGET_FORMATS, getCompatibleTargets } from '@/lib/formatRegistry';
 import { FormatPairSEO, POPULAR_SEO_PAIRS, resolveCanonicalSlug } from '@/lib/seoData';
 import { ArrowRight, ChevronDown } from 'lucide-react';
@@ -21,279 +20,43 @@ interface ConvertClientProps {
 }
 
 export const ConvertClient: React.FC<ConvertClientProps> = ({ seoData }) => {
-  const [files, setFiles] = useState<FileItem[]>([]);
-  const filesRef = useRef<FileItem[]>([]);
-  filesRef.current = files;
-
-  useEffect(() => {
-    return () => {
-      filesRef.current.forEach(f => {
-        if (f.previewUrl) URL.revokeObjectURL(f.previewUrl);
-      });
-    };
-  }, []);
-  const [isConvertingAny, setIsConvertingAny] = useState(false);
   const [openFaqIdx, setOpenFaqIdx] = useState<number | null>(0);
-  const dropzoneRef = React.useRef<any>(null);
-
-  const router = useRouter();
-  const [activeFormatFileId, setActiveFormatFileId] = useState<string | null>(null);
-  const [activeSettingsFileId, setActiveSettingsFileId] = useState<string | null>(null);
-  const [isBatchSettingsOpen, setIsBatchSettingsOpen] = useState(false);
-  const [isBatchFormatOpen, setIsBatchFormatOpen] = useState(false);
   const [heroPickerMode, setHeroPickerMode] = useState<'source' | 'target' | null>(null);
+  const dropzoneRef = useRef<DropzoneHandle | null>(null);
+  const router = useRouter();
 
-  const defaultSettings: ConversionSettings = {
-    quality: 90,
-    maintainAspectRatio: true,
-    dpi: 300,
-    grayscale: false,
-    bgColor: '#FFFFFF',
-  };
+  const {
+    files,
+    isConvertingAny,
+    activeFormatFileId,
+    setActiveFormatFileId,
+    activeSettingsFileId,
+    setActiveSettingsFileId,
+    isBatchSettingsOpen,
+    setIsBatchSettingsOpen,
+    isBatchFormatOpen,
+    setIsBatchFormatOpen,
+    handleFilesAdded,
+    handleSelectFormat,
+    handleSelectAllFormat,
+    handleSaveSettings,
+    handleRemoveFile,
+    handleClearAll,
+    handleConvertSingle,
+    handleConvertAll,
+    handleDownloadAllZip,
+    handleMergeToPdf,
+    activeFormatFile,
+    activeSettingsFile,
+  } = useConversionQueue({
+    enabled: false,
+    initialSource: seoData.source,
+    initialTarget: seoData.target,
+    defaultSourceExt: seoData.source,
+    zipFileName: `${seoData.slug}_conversions.zip`,
+    lockTargetToInitial: true,
+  });
 
-  const handleFilesAdded = useCallback(
-    (newFiles: File[]) => {
-      const newItems: FileItem[] = newFiles.map(file => {
-        const dotIdx = file.name.lastIndexOf('.');
-        const ext = dotIdx > 0 ? file.name.substring(dotIdx + 1).toLowerCase() : '';
-        const isImg =
-          file.type.startsWith('image/') ||
-          ['png', 'jpg', 'jpeg', 'webp', 'avif', 'bmp', 'tiff', 'gif', 'heic', 'ico', 'svg'].includes(ext);
-
-        return {
-          id: Math.random().toString(36).substring(2, 9) + Date.now().toString(36),
-          file,
-          name: file.name,
-          size: file.size,
-          sourceExt: ext || seoData.source,
-          targetFormat: seoData.target,
-          previewUrl: isImg ? URL.createObjectURL(file) : undefined,
-          status: 'idle',
-          progress: 0,
-          settings: { ...defaultSettings },
-        };
-      });
-
-      setFiles(prev => [...prev, ...newItems]);
-    },
-    [seoData]
-  );
-
-  const handleSelectFormat = (formatExt: string) => {
-    if (!activeFormatFileId) return;
-    setFiles(prev =>
-      prev.map(item =>
-        item.id === activeFormatFileId
-          ? {
-              ...item,
-              targetFormat: formatExt.toLowerCase(),
-              status: 'idle',
-              progress: 0,
-              resultBlob: undefined,
-              resultFileName: undefined,
-              errorMessage: undefined,
-            }
-          : item
-      )
-    );
-  };
-
-  const handleSelectAllFormat = (formatExt: string) => {
-    const cleanFmt = formatExt.toLowerCase();
-    setFiles(prev =>
-      prev.map(item => {
-        const compatible = getCompatibleTargets(item.sourceExt);
-        if (compatible.some(f => f.ext === cleanFmt)) {
-          return {
-            ...item,
-            targetFormat: cleanFmt,
-            status: 'idle',
-            progress: 0,
-            resultBlob: undefined,
-            resultFileName: undefined,
-            errorMessage: undefined,
-          };
-        }
-        return item;
-      })
-    );
-  };
-
-  const handleSaveSettings = (newSettings: ConversionSettings, applyToAll: boolean = false) => {
-    if (applyToAll || isBatchSettingsOpen) {
-      setFiles(prev =>
-        prev.map(item => ({
-          ...item,
-          settings: { ...newSettings },
-        }))
-      );
-      setIsBatchSettingsOpen(false);
-      return;
-    }
-
-    if (!activeSettingsFileId) return;
-    setFiles(prev =>
-      prev.map(item =>
-        item.id === activeSettingsFileId
-          ? {
-              ...item,
-              settings: newSettings,
-              status: 'idle',
-              progress: 0,
-              resultBlob: undefined,
-              resultFileName: undefined,
-              errorMessage: undefined,
-            }
-          : item
-      )
-    );
-  };
-
-  const handleRemoveFile = (id: string) => {
-    setFiles(prev => {
-      const filtered = prev.filter(f => f.id !== id);
-      const toRemove = prev.find(f => f.id === id);
-      if (toRemove?.previewUrl) URL.revokeObjectURL(toRemove.previewUrl);
-      return filtered;
-    });
-  };
-
-  const handleClearAll = () => {
-    files.forEach(f => {
-      if (f.previewUrl) URL.revokeObjectURL(f.previewUrl);
-    });
-    setFiles([]);
-  };
-
-  const handleConvertSingle = async (id: string) => {
-    const targetItem = filesRef.current.find(f => f.id === id);
-    if (!targetItem) return;
-
-    setFiles(prev =>
-      prev.map(f => (f.id === id ? { ...f, status: 'converting', progress: 15, errorMessage: undefined } : f))
-    );
-
-    try {
-      const result = await convertSingleFile(
-        targetItem.file,
-        targetItem.targetFormat,
-        targetItem.settings,
-        percent => {
-          setFiles(prev =>
-            prev.map(f => (f.id === id ? { ...f, progress: percent } : f))
-          );
-        }
-      );
-
-      setFiles(prev =>
-        prev.map(f =>
-          f.id === id
-            ? {
-                ...f,
-                status: 'completed',
-                progress: 100,
-                resultBlob: result.blob,
-                resultFileName: result.fileName,
-              }
-            : f
-        )
-      );
-    } catch (err: any) {
-      setFiles(prev =>
-        prev.map(f =>
-          f.id === id
-            ? {
-                ...f,
-                status: 'error',
-                progress: 0,
-                errorMessage: err.message || 'Conversion failed',
-              }
-            : f
-        )
-      );
-    }
-  };
-
-  const handleConvertAll = async () => {
-    setIsConvertingAny(true);
-    const pendingItems = filesRef.current.filter(f => f.status === 'idle' || f.status === 'error');
-
-    const CONCURRENCY = 3;
-    const queue = [...pendingItems];
-
-    const workers = Array(Math.min(CONCURRENCY, queue.length)).fill(null).map(async () => {
-      while (queue.length > 0) {
-        const item = queue.shift();
-        if (item) {
-          await handleConvertSingle(item.id);
-        }
-      }
-    });
-
-    await Promise.all(workers);
-    setIsConvertingAny(false);
-  };
-
-  const handleDownloadAllZip = async () => {
-    const completedItems = files.filter(f => f.status === 'completed' && f.resultBlob);
-    if (completedItems.length === 0) return;
-
-    const getCleanName = (item: FileItem) => {
-      if (item.resultFileName) return item.resultFileName;
-      const dotIdx = item.name.lastIndexOf('.');
-      const base = dotIdx > 0 ? item.name.substring(0, dotIdx) : item.name;
-      return `${base}.${item.targetFormat}`;
-    };
-
-    if (completedItems.length === 1) {
-      const item = completedItems[0];
-      downloadBlob(item.resultBlob!, getCleanName(item));
-      return;
-    }
-
-    try {
-      const JSZip = (await import('jszip')).default;
-      const zip = new JSZip();
-      const usedNames = new Map<string, number>();
-
-      completedItems.forEach(item => {
-        const rawName = getCleanName(item);
-        const count = usedNames.get(rawName) || 0;
-        usedNames.set(rawName, count + 1);
-
-        let finalName = rawName;
-        if (count > 0) {
-          const dotIdx = rawName.lastIndexOf('.');
-          if (dotIdx > 0) {
-            finalName = `${rawName.substring(0, dotIdx)} (${count})${rawName.substring(dotIdx)}`;
-          } else {
-            finalName = `${rawName} (${count})`;
-          }
-        }
-        zip.file(finalName, item.resultBlob!);
-      });
-      const zipBlob = await zip.generateAsync({ type: 'blob' });
-      downloadBlob(zipBlob, `${seoData.slug}_conversions.zip`);
-    } catch {
-      alert('Failed to bundle ZIP');
-    }
-  };
-
-  const handleMergeToPdf = async () => {
-    const imageFiles = files.map(f => f.file);
-    setIsConvertingAny(true);
-    try {
-      const res = await mergeImagesToPdf(imageFiles, 'combined_document.pdf');
-      downloadBlob(res.blob, res.fileName);
-    } catch (err: any) {
-      alert(`Merge failed: ${err.message}`);
-    } finally {
-      setIsConvertingAny(false);
-    }
-  };
-
-  const activeFormatFile = files.find(f => f.id === activeFormatFileId);
-  const activeSettingsFile = files.find(f => f.id === activeSettingsFileId);
   const otherPairs = POPULAR_SEO_PAIRS.filter(p => p.slug !== seoData.slug);
 
   return (
@@ -577,7 +340,7 @@ export const ConvertClient: React.FC<ConvertClientProps> = ({ seoData }) => {
             setActiveSettingsFileId(null);
             setIsBatchSettingsOpen(false);
           }}
-          settings={activeSettingsFile?.settings || files[0]?.settings || defaultSettings}
+          settings={activeSettingsFile?.settings || files[0]?.settings || DEFAULT_CONVERSION_SETTINGS}
           onSave={handleSaveSettings}
           fileName={activeSettingsFile?.name}
           targetFormat={activeSettingsFile?.targetFormat || files[0]?.targetFormat}

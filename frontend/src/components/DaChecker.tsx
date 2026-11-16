@@ -15,13 +15,16 @@ import {
   Eye
 } from 'lucide-react';
 import { analyzeDomainAuthority } from '../lib/api';
+import { DomainAuditRecommendation, DomainAuditResult } from '../types';
+
+type AuditTab = 'seo' | 'security' | 'technical' | 'recommendations';
 
 export const DaChecker: React.FC = () => {
   const [domain, setDomain] = useState('github.com');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [data, setData] = useState<any | null>(null);
-  const [activeTab, setActiveTab] = useState<'seo' | 'security' | 'technical' | 'recommendations'>('seo');
+  const [data, setData] = useState<DomainAuditResult | null>(null);
+  const [activeTab, setActiveTab] = useState<AuditTab>('seo');
 
   const handleAnalyze = async (targetDomain?: string) => {
     const input = (targetDomain || domain).trim();
@@ -33,8 +36,8 @@ export const DaChecker: React.FC = () => {
     try {
       const res = await analyzeDomainAuthority(input);
       setData(res);
-    } catch (err: any) {
-      setError(err.message || 'Domain analysis failed');
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Domain analysis failed');
     } finally {
       setIsLoading(false);
     }
@@ -213,16 +216,18 @@ export const DaChecker: React.FC = () => {
 
           {/* Audit Tabs */}
           <div className="flex items-center gap-1 border-b border-slate-200 dark:border-slate-800 pb-2 overflow-x-auto no-scrollbar">
-            {[
-              { id: 'seo', label: 'On-Page SEO', icon: <FileText className="w-3.5 h-3.5" /> },
-              { id: 'security', label: 'TLS & Security Headers', icon: <Lock className="w-3.5 h-3.5" /> },
-              { id: 'technical', label: 'Server & Crawlability', icon: <Server className="w-3.5 h-3.5" /> },
-              { id: 'recommendations', label: `Audit Findings (${data.recommendations.length})`, icon: <CheckCircle2 className="w-3.5 h-3.5" /> },
-            ].map(tab => (
+            {(
+              [
+                { id: 'seo', label: 'On-Page SEO', icon: <FileText className="w-3.5 h-3.5" /> },
+                { id: 'security', label: 'TLS & Security Headers', icon: <Lock className="w-3.5 h-3.5" /> },
+                { id: 'technical', label: 'Server & Crawlability', icon: <Server className="w-3.5 h-3.5" /> },
+                { id: 'recommendations', label: `Audit Findings (${data.recommendations.length})`, icon: <CheckCircle2 className="w-3.5 h-3.5" /> },
+              ] satisfies Array<{ id: AuditTab; label: string; icon: React.ReactNode }>
+            ).map(tab => (
               <button
                 key={tab.id}
                 type="button"
-                onClick={() => setActiveTab(tab.id as any)}
+                onClick={() => setActiveTab(tab.id)}
                 className={`px-3 py-1.5 rounded-lg text-xs font-medium flex items-center gap-1.5 transition-colors cursor-pointer whitespace-nowrap ${
                   activeTab === tab.id
                     ? 'bg-slate-900 text-white dark:bg-white dark:text-slate-900'
@@ -317,7 +322,11 @@ export const DaChecker: React.FC = () => {
                     <div className="flex justify-between">
                       <span className="text-slate-500">Validity Remaining</span>
                       <span className="font-mono font-medium text-slate-900 dark:text-slate-200 tabular-nums">
-                        {data.ssl.days_left} days
+                        {data.ssl.days_left != null
+                          ? `${data.ssl.days_left} days`
+                          : data.ssl.valid
+                          ? 'Verified (Edge Relay)'
+                          : 'N/A'}
                       </span>
                     </div>
                     <div className="flex justify-between">
@@ -335,7 +344,7 @@ export const DaChecker: React.FC = () => {
                     Response Security Headers
                   </h4>
                   <div className="space-y-1.5 pt-1">
-                    {Object.entries(data.security_headers).map(([hdr, active]: [string, any]) => (
+                    {Object.entries(data.security_headers).map(([hdr, active]) => (
                       <div key={hdr} className="flex justify-between items-center">
                         <span className="font-mono text-slate-600 dark:text-slate-400 text-[11px] truncate">{hdr}</span>
                         {active ? (
@@ -420,7 +429,7 @@ export const DaChecker: React.FC = () => {
           {activeTab === 'recommendations' && (
             <div className="panel p-4 sm:p-5 rounded-xl space-y-3">
               <div className="space-y-2 text-xs">
-                {data.recommendations.map((rec: any, idx: number) => (
+                {data.recommendations.map((rec: DomainAuditRecommendation, idx: number) => (
                   <div
                     key={idx}
                     className={`p-3 rounded-lg border flex items-start gap-2.5 ${

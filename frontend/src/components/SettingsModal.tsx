@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { X, Lock, Unlock } from 'lucide-react';
 import { ConversionSettings } from '../types';
 
@@ -15,8 +15,13 @@ interface SettingsModalProps {
   totalFiles?: number;
 }
 
-export const SettingsModal: React.FC<SettingsModalProps> = ({
-  isOpen,
+export const SettingsModal: React.FC<SettingsModalProps> = (props) => {
+  if (!props.isOpen) return null;
+  const resetKey = `${props.isBatch ? 'batch' : props.fileName || 'single'}-${props.targetFormat || ''}`;
+  return <SettingsModalBody key={resetKey} {...props} />;
+};
+
+const SettingsModalBody: React.FC<SettingsModalProps> = ({
   onClose,
   settings: initialSettings,
   onSave,
@@ -27,15 +32,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 }) => {
   const [settings, setSettings] = useState<ConversionSettings>({ ...initialSettings });
   const [applyToAll, setApplyToAll] = useState<boolean>(isBatch);
-
-  useEffect(() => {
-    if (isOpen) {
-      setSettings({ ...initialSettings });
-      setApplyToAll(isBatch);
-    }
-  }, [isOpen, initialSettings, isBatch]);
-
-  if (!isOpen) return null;
 
   const handleSave = () => {
     onSave(settings, isBatch ? true : applyToAll);

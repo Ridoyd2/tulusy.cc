@@ -190,6 +190,60 @@ def run_tests():
     assert wide_pdf.exists() and wide_pdf.stat().st_size > 0
     print(f"[PASS] Wide 25-column CSV/XLSX to PDF without overflow (Size: {wide_pdf.stat().st_size} bytes)")
 
+    # 12. Test CSV -> XLSX preserves leading zeros, signed strings, and rejects inf/nan
+    import openpyxl
+    lz_csv = test_dir / "leading_zeros.csv"
+    lz_csv.write_text("Code,Count,Ratio,Special\n00123,42,3.14,inf\n+007,-042,0.50,nan\n", encoding="utf-8")
+    lz_xlsx = test_dir / "leading_zeros.xlsx"
+    convert_csv_to_xlsx(lz_csv, lz_xlsx)
+    wb = openpyxl.load_workbook(str(lz_xlsx), data_only=True)
+    ws = wb.active
+    assert ws["A2"].value == "00123" and isinstance(ws["A2"].value, str), f"Expected '00123' str, got {ws['A2'].value!r}"
+    assert ws["B2"].value == 42 and isinstance(ws["B2"].value, int)
+    assert ws["C2"].value == 3.14 and isinstance(ws["C2"].value, float)
+    assert ws["D2"].value == "inf" and isinstance(ws["D2"].value, str)
+    assert ws["A3"].value == "+007" and isinstance(ws["A3"].value, str)
+    assert ws["D3"].value == "nan" and isinstance(ws["D3"].value, str)
+    wb.close()
+    print("[PASS] CSV -> XLSX preserves leading zeros and treats non-finite strings safely")
+
+    # 13. Test MAX_PDF_PAGES limit enforcement across PDF converters
+    import fitz
+    from app.config import MAX_PDF_PAGES
+    over_limit_pdf = test_dir / "over_limit.pdf"
+    doc = fitz.open()
+    for _ in range(MAX_PDF_PAGES + 1):
+        doc.new_page()
+    doc.save(str(over_limit_pdf))
+    doc.close()
+
+    for label, fn, ext in [
+        ("PDF -> TXT", convert_pdf_to_txt, "txt"),
+        ("PDF -> DOCX", convert_pdf_to_docx, "docx"),
+        ("PDF -> XLSX", convert_pdf_to_xlsx, "xlsx"),
+    ]:
+        raised = False
+        try:
+            fn(over_limit_pdf, test_dir / f"over_limit.{ext}")
+        except ValueError:
+            raised = True
+        assert raised, f"{label} bypassed MAX_PDF_PAGES ({MAX_PDF_PAGES})"
+    print(f"[PASS] MAX_PDF_PAGES ({MAX_PDF_PAGES}) enforced across PDF -> TXT/DOCX/XLSX")
+
+    # 14. Test /api/formats matches backend handlers
+    from fastapi.testclient import TestClient
+    from app.main import app
+    client = TestClient(app)
+    fmts_resp = client.get("/api/formats")
+    assert fmts_resp.status_code == 200
+    fmts = fmts_resp.json()
+    img_exts = {item["ext"]: item for item in fmts["images"]}
+    doc_exts = {item["ext"]: item for item in fmts["documents"]}
+    assert "eps" not in img_exts
+    assert "html" not in doc_exts
+    assert img_exts["psd"].get("input_only") is True
+    print("[PASS] /api/formats registry aligned with converter handlers")
+
     print("\n[SUCCESS] ALL BACKEND CONVERSION TESTS PASSED PERFECTLY!")
 
 if __name__ == "__main__":

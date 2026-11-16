@@ -13,6 +13,7 @@ import {
   Info
 } from 'lucide-react';
 import { executeLoadTest, fetchProxyStatus, downloadBlob } from '../lib/api';
+import { LoadTestRequestResult, LoadTestResult, ProxyStatus } from '../types';
 
 export const LoadTester: React.FC = () => {
   const [url, setUrl] = useState('https://httpbin.org/get');
@@ -20,10 +21,10 @@ export const LoadTester: React.FC = () => {
   const [concurrency, setConcurrency] = useState(5);
   const [method, setMethod] = useState('GET');
   const [executionMode, setExecutionMode] = useState<'browser' | 'edge'>('browser');
-  const [proxyStatus, setProxyStatus] = useState<{ proxied: boolean; mode: string } | null>(null);
+  const [proxyStatus, setProxyStatus] = useState<ProxyStatus | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [results, setResults] = useState<any | null>(null);
+  const [results, setResults] = useState<LoadTestResult | null>(null);
 
   useEffect(() => {
     fetchProxyStatus().then(setProxyStatus);
@@ -63,8 +64,8 @@ export const LoadTester: React.FC = () => {
           'Edge Relay is not configured on the server (CF_WORKER_RELAY_URL / WARP). Executed in Client Browser Mode to protect the server origin IP.';
       }
       setResults(data);
-    } catch (err: any) {
-      setError(err.message || 'Load test execution failed');
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Load test execution failed');
     } finally {
       setIsLoading(false);
     }
@@ -78,9 +79,11 @@ export const LoadTester: React.FC = () => {
       downloadBlob(blob, `load_test_${Date.now()}.json`);
     } else {
       let csv = 'Request ID,Status Code,Duration (ms),Bytes,Success,Error\n';
-      results.timeline.forEach((r: any) => {
-        const escapedErr = `"${String(r.error || '').replace(/"/g, '""')}"`;
-        csv += `${r.id},${r.status_code},${r.duration_ms},${r.bytes},${r.success},${escapedErr}\n`;
+      results.timeline.forEach((r: LoadTestRequestResult) => {
+        const statusLabel = r.opaque ? '0 (Opaque)' : String(r.status_code);
+        const errText = r.opaque ? 'Opaque (No-CORS)' : String(r.error || '');
+        const escapedErr = `"${errText.replace(/"/g, '""')}"`;
+        csv += `${r.id},${statusLabel},${r.duration_ms},${r.bytes},${r.success},${escapedErr}\n`;
       });
       const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
       downloadBlob(blob, `load_test_${Date.now()}.csv`);
@@ -267,7 +270,7 @@ export const LoadTester: React.FC = () => {
           <div className="p-3 rounded-lg bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900/60 text-amber-800 dark:text-amber-200 text-xs flex items-start gap-2">
             <Info className="w-4 h-4 shrink-0 mt-0.5 text-amber-600 dark:text-amber-400" />
             <span>
-              Edge Relay is not configured on the server (`CF_WORKER_RELAY_URL` / WARP). Benchmarks will run in <strong>Client Browser Mode</strong> so the server IP stays hidden.
+              Edge Relay is not configured on the server (<code>CF_WORKER_RELAY_URL</code> / WARP). Benchmarks will run in <strong>Client Browser Mode</strong> so the server IP stays hidden.
             </span>
           </div>
         )}
@@ -311,20 +314,34 @@ export const LoadTester: React.FC = () => {
                 {results.requests_per_second} <span className="text-xs font-normal text-slate-400">req/s</span>
               </p>
               <p className="text-[11px] text-slate-400 font-mono tabular-nums truncate">
-                {results.total_bytes_transferred === 0 && results.opaque_responses > 0
-                  ? 'Opaque (No-CORS)'
+                {results.total_bytes_transferred === 0 && (results.opaque_responses ?? 0) > 0
+                  ? 'Opaque (Reachable)'
                   : `${results.transfer_rate_kbps} KB/s`}
               </p>
             </div>
 
             <div className="panel p-4 rounded-xl space-y-1">
-              <span className="text-xs text-slate-500 dark:text-slate-400">Success Rate</span>
-              <p className="text-xl sm:text-2xl font-bold font-mono text-emerald-600 dark:text-emerald-400 tabular-nums">
-                {results.success_rate_percent}%
-              </p>
-              <p className="text-[11px] text-slate-400 font-mono tabular-nums truncate">
-                {results.successful_requests}/{results.total_requests} OK
-              </p>
+              {(results.opaque_responses ?? 0) > 0 && results.successful_requests === 0 ? (
+                <>
+                  <span className="text-xs text-slate-500 dark:text-slate-400">Reachability</span>
+                  <p className="text-base sm:text-lg font-bold font-mono text-sky-600 dark:text-sky-400 tabular-nums pt-0.5">
+                    Opaque (Reachable)
+                  </p>
+                  <p className="text-[11px] text-slate-400 font-mono tabular-nums truncate">
+                    {results.opaque_responses}/{results.total_requests} No-CORS · Status hidden
+                  </p>
+                </>
+              ) : (
+                <>
+                  <span className="text-xs text-slate-500 dark:text-slate-400">Success Rate</span>
+                  <p className="text-xl sm:text-2xl font-bold font-mono text-emerald-600 dark:text-emerald-400 tabular-nums">
+                    {results.success_rate_percent}%
+                  </p>
+                  <p className="text-[11px] text-slate-400 font-mono tabular-nums truncate">
+                    {results.successful_requests}/{results.total_requests} OK
+                  </p>
+                </>
+              )}
             </div>
 
             <div className="panel p-4 rounded-xl space-y-1">
@@ -402,7 +419,7 @@ export const LoadTester: React.FC = () => {
               </div>
 
               <div className="flex flex-wrap gap-1.5 pt-1">
-                {Object.entries(results.status_distribution).map(([code, cnt]: [string, any]) => (
+                {Object.entries(results.status_distribution).map(([code, cnt]) => (
                   <span
                     key={code}
                     className="px-2 py-0.5 rounded text-[11px] font-mono bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700 tabular-nums"
@@ -410,10 +427,15 @@ export const LoadTester: React.FC = () => {
                     HTTP {code}: <strong>{cnt}</strong>
                   </span>
                 ))}
+                {(results.opaque_responses ?? 0) > 0 && (
+                  <span className="px-2 py-0.5 rounded text-[11px] font-mono bg-sky-50 dark:bg-sky-950/40 text-sky-700 dark:text-sky-300 border border-sky-200 dark:border-sky-800 tabular-nums">
+                    Opaque (Reachable): <strong>{results.opaque_responses}</strong>
+                  </span>
+                )}
               </div>
-              {results.opaque_responses > 0 && (
+              {(results.opaque_responses ?? 0) > 0 && (
                 <p className="text-[11px] text-slate-500 dark:text-slate-400">
-                  {results.opaque_responses} opaque no-CORS response{results.opaque_responses === 1 ? '' : 's'} (status inferred as reachable; payload size hidden by browser CORS policy).
+                  {results.opaque_responses} opaque no-CORS response{results.opaque_responses === 1 ? '' : 's'} (target reached, but HTTP status and byte size are hidden by browser CORS policy).
                 </p>
               )}
             </div>
@@ -449,10 +471,17 @@ export const LoadTester: React.FC = () => {
 
             <div className="h-36 sm:h-40 w-full bg-slate-50 dark:bg-slate-900/60 rounded-lg p-3 border border-slate-200/70 dark:border-slate-800 flex items-end gap-1 overflow-x-auto no-scrollbar">
               {(() => {
-                const maxVal = Math.max(...results.timeline.map((t: any) => t.duration_ms), 1);
-                return results.timeline.map((item: any) => {
+                const maxVal = Math.max(...results.timeline.map((t: LoadTestRequestResult) => t.duration_ms), 1);
+                return results.timeline.map((item: LoadTestRequestResult) => {
                   const heightPercent = Math.max(8, (item.duration_ms / maxVal) * 100);
                   const isSuccess = item.success;
+                  const barColor = item.opaque
+                    ? 'bg-sky-500'
+                    : isSuccess
+                    ? item.duration_ms > results.latency_stats_ms.p90
+                      ? 'bg-amber-500'
+                      : 'bg-slate-800 dark:bg-slate-200'
+                    : 'bg-red-500';
                   return (
                     <div
                       key={item.id}
@@ -460,18 +489,14 @@ export const LoadTester: React.FC = () => {
                     >
                       <div
                         style={{ height: `${heightPercent}%` }}
-                        className={`w-full rounded-t-xs transition-opacity group-hover:opacity-75 ${
-                          isSuccess
-                            ? item.duration_ms > results.latency_stats_ms.p90
-                              ? 'bg-amber-500'
-                              : 'bg-slate-800 dark:bg-slate-200'
-                            : 'bg-red-500'
-                        }`}
+                        className={`w-full rounded-t-xs transition-opacity group-hover:opacity-75 ${barColor}`}
                       />
                       <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 hidden group-hover:flex flex-col items-center z-30 pointer-events-none">
                         <div className="bg-slate-900 text-white text-[10px] font-mono rounded py-1 px-2 whitespace-nowrap shadow-lg border border-slate-700 tabular-nums">
                           <p>#{item.id}: {item.duration_ms}ms</p>
-                          <p className="text-slate-400">HTTP {item.status_code || item.error}</p>
+                          <p className="text-slate-400">
+                            {item.opaque ? 'Opaque (Reachable)' : item.status_code > 0 ? `HTTP ${item.status_code}` : item.error}
+                          </p>
                         </div>
                       </div>
                     </div>

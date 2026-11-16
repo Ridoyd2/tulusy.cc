@@ -3,7 +3,7 @@ import { FileItem, ConversionSettings } from '../types';
 import { DEFAULT_TARGET_FORMATS, getCompatibleTargets, ALL_FORMATS } from '../lib/formatRegistry';
 import { convertSingleFile, mergeImagesToPdf, downloadBlob } from '../lib/api';
 
-const defaultSettings: ConversionSettings = {
+export const DEFAULT_CONVERSION_SETTINGS: ConversionSettings = {
   quality: 90,
   maintainAspectRatio: true,
   dpi: 300,
@@ -11,10 +11,36 @@ const defaultSettings: ConversionSettings = {
   bgColor: '#FFFFFF',
 };
 
-export function useConversionQueue(enabled: boolean = true) {
+export interface UseConversionQueueOptions {
+  enabled?: boolean;
+  initialSource?: string;
+  initialTarget?: string;
+  defaultSourceExt?: string;
+  zipFileName?: string;
+  lockTargetToInitial?: boolean;
+}
+
+export function useConversionQueue(
+  enabledOrOptions: boolean | UseConversionQueueOptions = true
+) {
+  const options: UseConversionQueueOptions =
+    typeof enabledOrOptions === 'boolean'
+      ? { enabled: enabledOrOptions }
+      : enabledOrOptions;
+
+  const enabled = options.enabled ?? true;
+  const initialSource = (options.initialSource || 'png').toLowerCase().replace('.', '');
+  const initialTarget = (options.initialTarget || 'webp').toLowerCase().replace('.', '');
+  const defaultSourceExt = options.defaultSourceExt?.toLowerCase().replace('.', '');
+  const zipFileName = options.zipFileName || 'Tulusy_Conversions.zip';
+  const lockTargetToInitial = options.lockTargetToInitial ?? false;
+
   const [files, setFiles] = useState<FileItem[]>([]);
-  const filesRef = useRef<FileItem[]>([]);
-  filesRef.current = files;
+  const filesRef = useRef<FileItem[]>(files);
+
+  useEffect(() => {
+    filesRef.current = files;
+  }, [files]);
 
   useEffect(() => {
     return () => {
@@ -25,8 +51,8 @@ export function useConversionQueue(enabled: boolean = true) {
   }, []);
   const [isConvertingAny, setIsConvertingAny] = useState(false);
   const [activePreset, setActivePreset] = useState<{ target: string; label: string; accept?: string } | null>(null);
-  const [heroSourceFormat, setHeroSourceFormat] = useState<string>('png');
-  const [heroTargetFormat, setHeroTargetFormat] = useState<string>('webp');
+  const [heroSourceFormat, setHeroSourceFormat] = useState<string>(initialSource);
+  const [heroTargetFormat, setHeroTargetFormat] = useState<string>(initialTarget);
   
   const [activeFormatFileId, setActiveFormatFileId] = useState<string | null>(null);
   const [activeSettingsFileId, setActiveSettingsFileId] = useState<string | null>(null);
@@ -89,22 +115,23 @@ export function useConversionQueue(enabled: boolean = true) {
       
       const compatible = ext ? getCompatibleTargets(ext) : ALL_FORMATS;
       const canUseHeroTarget = compatible.some(f => f.ext === heroTargetFormat);
-      const targetFmt =
-        activePreset?.target ||
-        (canUseHeroTarget ? heroTargetFormat : DEFAULT_TARGET_FORMATS[ext]) ||
-        'webp';
+      const targetFmt = lockTargetToInitial
+        ? initialTarget
+        : activePreset?.target ||
+          (canUseHeroTarget ? heroTargetFormat : DEFAULT_TARGET_FORMATS[ext]) ||
+          'webp';
 
       return {
         id: Math.random().toString(36).substring(2, 9) + Date.now().toString(36),
         file,
         name: file.name,
         size: file.size,
-        sourceExt: ext || 'bin',
+        sourceExt: ext || defaultSourceExt || 'bin',
         targetFormat: targetFmt,
         previewUrl: isImg ? URL.createObjectURL(file) : undefined,
         status: 'idle',
         progress: 0,
-        settings: { ...defaultSettings },
+        settings: { ...DEFAULT_CONVERSION_SETTINGS },
       };
     });
 
@@ -120,7 +147,7 @@ export function useConversionQueue(enabled: boolean = true) {
     setActivePreset(null);
     dragCounterRef.current = 0;
     setIsGlobalDragging(false);
-  }, [activePreset, heroTargetFormat]);
+  }, [activePreset, heroTargetFormat, defaultSourceExt, initialTarget, lockTargetToInitial]);
 
   const handleSelectFormat = (formatExt: string) => {
     if (!activeFormatFileId) return;
@@ -169,6 +196,11 @@ export function useConversionQueue(enabled: boolean = true) {
         prev.map(item => ({
           ...item,
           settings: { ...newSettings },
+          status: 'idle',
+          progress: 0,
+          resultBlob: undefined,
+          resultFileName: undefined,
+          errorMessage: undefined,
         }))
       );
       setIsBatchSettingsOpen(false);
@@ -312,7 +344,7 @@ export function useConversionQueue(enabled: boolean = true) {
             : f
         )
       );
-    } catch (err: any) {
+    } catch (err: unknown) {
       setFiles(prev =>
         prev.map(f =>
           f.id === id
@@ -320,7 +352,7 @@ export function useConversionQueue(enabled: boolean = true) {
                 ...f,
                 status: 'error',
                 progress: 0,
-                errorMessage: err.message || 'Conversion failed',
+                errorMessage: err instanceof Error ? err.message : 'Conversion failed',
               }
             : f
         )
@@ -389,7 +421,7 @@ export function useConversionQueue(enabled: boolean = true) {
       });
       
       const zipBlob = await zip.generateAsync({ type: 'blob' });
-      downloadBlob(zipBlob, 'Tulusy_Conversions.zip');
+      downloadBlob(zipBlob, zipFileName);
     } catch {
       alert("Failed to create ZIP archive.");
     }
@@ -401,8 +433,8 @@ export function useConversionQueue(enabled: boolean = true) {
     try {
       const res = await mergeImagesToPdf(imageFiles, 'combined_document.pdf');
       downloadBlob(res.blob, res.fileName);
-    } catch (err: any) {
-      alert(`Merge failed: ${err.message}`);
+    } catch (err: unknown) {
+      alert(`Merge failed: ${err instanceof Error ? err.message : 'Merge error'}`);
     } finally {
       setIsConvertingAny(false);
     }

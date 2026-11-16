@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
+import React, { useSyncExternalStore } from 'react';
 import Link from 'next/link';
 import {
   ArrowLeftRight,
@@ -16,6 +16,22 @@ import { ActiveTool, TOOL_ROUTES } from '@/lib/toolsConfig';
 
 export type { ActiveTool };
 
+function subscribeTheme(callback: () => void) {
+  if (typeof document === 'undefined') return () => {};
+  const observer = new MutationObserver(callback);
+  observer.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
+  return () => observer.disconnect();
+}
+
+function getThemeSnapshot(): 'light' | 'dark' | null {
+  if (typeof document === 'undefined') return null;
+  return document.documentElement.classList.contains('dark') ? 'dark' : 'light';
+}
+
+function getServerThemeSnapshot(): 'light' | 'dark' | null {
+  return null;
+}
+
 interface NavbarProps {
   activeTool?: ActiveTool | null;
   onSelectTool?: (tool: ActiveTool) => void;
@@ -27,18 +43,10 @@ export const Navbar: React.FC<NavbarProps> = ({
   onSelectTool,
   onSelectQuickFilter,
 }) => {
-  const [theme, setTheme] = useState<'light' | 'dark'>('dark');
-  const [mounted, setMounted] = useState(false);
-
-  useEffect(() => {
-    setMounted(true);
-    const isDark = document.documentElement.classList.contains('dark');
-    setTheme(isDark ? 'dark' : 'light');
-  }, []);
+  const theme = useSyncExternalStore(subscribeTheme, getThemeSnapshot, getServerThemeSnapshot);
 
   const toggleTheme = () => {
     const nextTheme = theme === 'dark' ? 'light' : 'dark';
-    setTheme(nextTheme);
     localStorage.setItem('theme', nextTheme);
     if (nextTheme === 'dark') {
       document.documentElement.classList.add('dark');
@@ -100,10 +108,10 @@ export const Navbar: React.FC<NavbarProps> = ({
             type="button"
             onClick={toggleTheme}
             className="w-8 h-8 rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors cursor-pointer flex items-center justify-center shrink-0"
-            title={mounted ? `Switch to ${theme === 'dark' ? 'Light' : 'Dark'} mode` : 'Toggle Theme'}
+            title={theme ? `Switch to ${theme === 'dark' ? 'Light' : 'Dark'} mode` : 'Toggle Theme'}
             aria-label="Toggle color theme"
           >
-            {mounted && theme === 'dark' ? (
+            {theme === 'dark' ? (
               <Sun className="w-4 h-4 text-amber-400" />
             ) : (
               <Moon className="w-4 h-4" />

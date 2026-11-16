@@ -1,7 +1,9 @@
 import csv
+import math
 from pathlib import Path
 from typing import List, Optional
 from xml.sax.saxutils import escape
+from app.config import MAX_PDF_PAGES, MAX_XLSX_PDF_ROWS
 
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
@@ -59,6 +61,8 @@ def convert_xlsx_to_pdf(xlsx_path: Path, pdf_path: Path) -> Path:
             MAX_CELL_CHARS = 800
             for row in sheet.iter_rows(values_only=True):
                 if any(cell is not None for cell in row):
+                    if len(raw_rows) >= MAX_XLSX_PDF_ROWS:
+                        raise ValueError(f"Spreadsheet exceeds maximum supported row limit for PDF conversion ({MAX_XLSX_PDF_ROWS} rows).")
                     trimmed = list(row[:MAX_PDF_COLS])
                     row_vals = []
                     for cell in trimmed:
@@ -163,12 +167,17 @@ def convert_csv_to_xlsx(csv_path: Path, xlsx_path: Path) -> Path:
                 for col_idx, value in enumerate(row, start=1):
                     val = value.strip()
                     if val.isdigit():
-                        cell_val = int(val)
+                        cell_val = val if (len(val) > 1 and val.startswith("0")) else int(val)
                     else:
-                        try:
-                            cell_val = float(val)
-                        except ValueError:
+                        unsigned = val.lstrip("+-")
+                        if len(unsigned) > 1 and unsigned.startswith("0") and not unsigned.startswith("0."):
                             cell_val = val
+                        else:
+                            try:
+                                parsed_num = float(val)
+                                cell_val = parsed_num if math.isfinite(parsed_num) else val
+                            except ValueError:
+                                cell_val = val
 
                     cell = ws.cell(row=row_idx, column=col_idx, value=cell_val)
                     cell.border = thin_border
@@ -218,6 +227,9 @@ def convert_pdf_to_xlsx(pdf_path: Path, xlsx_path: Path) -> Path:
         )
 
         has_any_data = False
+
+        if len(doc) > MAX_PDF_PAGES:
+            raise ValueError(f"PDF exceeds maximum supported page limit ({MAX_PDF_PAGES} pages).")
 
         for page_idx, page in enumerate(doc):
             ws = wb.create_sheet(title=f"Page {page_idx + 1}")

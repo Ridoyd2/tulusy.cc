@@ -88,7 +88,11 @@ export const FileQueue: React.FC<FileQueueProps> = ({
                   title="Change output format for all files in queue"
                 >
                   <span className="text-[10px] text-slate-400 font-sans font-normal">All to:</span>
-                  <span>{items[0]?.targetFormat?.toUpperCase() || 'TARGET'}</span>
+                  <span>
+                    {new Set(items.map(i => i.targetFormat.toLowerCase())).size === 1
+                      ? items[0]?.targetFormat?.toUpperCase() || 'TARGET'
+                      : 'MIXED'}
+                  </span>
                   <ChevronDown className="w-3 h-3 text-slate-400" />
                 </button>
               )}
@@ -180,6 +184,8 @@ export const FileQueue: React.FC<FileQueueProps> = ({
               <div className="flex items-center gap-3 min-w-0">
                 <div className="w-10 h-10 rounded-lg bg-slate-100 border border-slate-200 dark:bg-slate-800 dark:border-slate-700 flex items-center justify-center shrink-0 overflow-hidden">
                   {isImg ? (
+                    /* Ephemeral client blob URL preview cannot use next/image optimization */
+                    /* eslint-disable-next-line @next/next/no-img-element */
                     <img
                       src={item.previewUrl}
                       alt={item.name}

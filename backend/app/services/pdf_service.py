@@ -17,8 +17,18 @@ from reportlab.lib.pagesizes import letter
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
 from reportlab.lib.styles import getSampleStyleSheet
 from docx import Document
-from app.config import MAX_PDF_PAGES
+from app.config import MAX_PDF_PAGES, MAX_TXT_PDF_LINES
 from app.services.image_service import convert_single_image, load_image, _composite_to_rgb
+
+
+def _ensure_pdf_page_limit(pdf_path: Path) -> None:
+    """Validates PDF page count against MAX_PDF_PAGES to prevent CPU/memory exhaustion."""
+    doc = fitz.open(str(pdf_path))
+    try:
+        if len(doc) > MAX_PDF_PAGES:
+            raise ValueError(f"PDF exceeds maximum supported page limit ({MAX_PDF_PAGES} pages).")
+    finally:
+        doc.close()
 
 
 def _safe_para_text(text: str) -> str:
@@ -29,6 +39,7 @@ def _safe_para_text(text: str) -> str:
 
 def convert_pdf_to_docx(pdf_path: Path, docx_path: Path) -> Path:
     """Converts a PDF file to a fully editable Word (.docx) document."""
+    _ensure_pdf_page_limit(pdf_path)
     cv = PDF2DocxConverter(str(pdf_path))
     try:
         cv.convert(str(docx_path), start=0, end=None)
@@ -41,6 +52,8 @@ def convert_pdf_to_txt(pdf_path: Path, txt_path: Path) -> Path:
     """Extracts plain text from all pages of a PDF document."""
     doc = fitz.open(str(pdf_path))
     try:
+        if len(doc) > MAX_PDF_PAGES:
+            raise ValueError(f"PDF exceeds maximum supported page limit ({MAX_PDF_PAGES} pages).")
         pages_text = []
         for idx, page in enumerate(doc):
             text = page.get_text("text").strip()
@@ -199,7 +212,9 @@ def convert_txt_to_pdf(txt_path: Path, pdf_path: Path) -> Path:
     story = []
 
     with open(txt_path, "r", encoding="utf-8", errors="ignore") as f:
-        for line in f:
+        for line_num, line in enumerate(f, start=1):
+            if line_num > MAX_TXT_PDF_LINES:
+                raise ValueError(f"Text file exceeds maximum supported line limit for PDF conversion ({MAX_TXT_PDF_LINES} lines).")
             line_str = line.strip()
             if line_str:
                 story.append(Paragraph(_safe_para_text(line_str), normal_style))

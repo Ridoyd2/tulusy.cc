@@ -11,7 +11,7 @@ async def periodic_expiry_cleanup():
     """Background task to regularly purge expired files (7-day lifecycle)."""
     while True:
         try:
-            cleanup_expired_files_job()
+            await asyncio.to_thread(cleanup_expired_files_job)
         except Exception as e:
             print(f"Error running periodic expiry cleanup: {e}")
         await asyncio.sleep(600)  # Run every 10 minutes
@@ -73,7 +73,7 @@ def get_supported_formats():
             {"ext": "tiff", "name": "TIFF High-Res Image", "mime": "image/tiff", "category": "image", "lossless": True},
             {"ext": "gif", "name": "GIF Animated Image", "mime": "image/gif", "category": "image", "lossless": True},
             {"ext": "heic", "name": "HEIC Apple Photo", "mime": "image/heic", "category": "image", "lossless": False},
-            {"ext": "psd", "name": "Photoshop PSD Document", "mime": "image/vnd.adobe.photoshop", "category": "image", "lossless": True},
+            {"ext": "psd", "name": "Photoshop PSD Document", "mime": "image/vnd.adobe.photoshop", "category": "image", "lossless": True, "input_only": True},
             {"ext": "tga", "name": "TGA Truevision Targa", "mime": "image/x-tga", "category": "image", "lossless": True},
             {"ext": "pdf", "name": "PDF Document (Image Page)", "mime": "application/pdf", "category": "document", "lossless": True}
         ],

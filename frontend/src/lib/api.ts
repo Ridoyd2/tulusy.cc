@@ -1,4 +1,12 @@
-import { ConversionSettings } from '../types';
+import {
+  ConversionSettings,
+  DomainAuditResult,
+  IpDetailsResult,
+  LoadTestCodeSummary,
+  LoadTestRequestResult,
+  LoadTestResult,
+  ProxyStatus,
+} from '../types';
 import { SITE_DOMAIN } from './site';
 
 export function getApiBaseUrl(): string {
@@ -138,7 +146,8 @@ export async function executeBrowserLoadTest(params: {
   timeout?: number;
   method?: string;
   payload?: string;
-}): Promise<any> {
+  cacheBust?: boolean;
+}): Promise<LoadTestResult> {
   const targetUrl = params.url.trim();
   let parsedUrl: URL;
   try {
@@ -167,15 +176,9 @@ export async function executeBrowserLoadTest(params: {
   const concurrency = Math.max(1, Math.min(20, params.concurrency || 5));
   const timeoutMs = Math.max(1000, Math.min(30000, (params.timeout || 10) * 1000));
   const method = (params.method || 'GET').toUpperCase();
+  const canUseNoCors = method === 'GET' || method === 'HEAD' || method === 'POST';
 
-  const results: Array<{
-    id: number;
-    status_code: number;
-    duration_ms: number;
-    bytes: number;
-    error: string | null;
-    success: boolean;
-  }> = [];
+  const results: LoadTestRequestResult[] = [];
 
   let nextId = 1;
   let preferNoCors = false;
@@ -189,25 +192,29 @@ export async function executeBrowserLoadTest(params: {
       let statusCode = 0;
       let sizeBytes = 0;
       let errStr: string | null = null;
+      let isOpaque = false;
 
-      // Append cache-buster so browser does not serve cached responses during load benchmark
-      const sep = targetUrl.includes('?') ? '&' : '?';
-      const benchUrl = `${targetUrl}${sep}_t=${Date.now()}_${reqId}`;
+      const benchUrl = params.cacheBust
+        ? `${targetUrl}${targetUrl.includes('?') ? '&' : '?'}_t=${Date.now()}_${reqId}`
+        : targetUrl;
 
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), timeoutMs);
 
       const fetchOpaque = async () => {
         const opaqueResp = await fetch(benchUrl, {
-          method: method === 'PUT' ? 'POST' : method,
+          method,
           body: method === 'POST' ? params.payload : undefined,
           cache: 'no-store',
           mode: 'no-cors',
           signal: controller.signal,
         });
-        if (opaqueResp.type === 'opaque' || opaqueResp.ok) {
-          statusCode = 200;
-          if (opaqueResp.type === 'opaque') opaqueCount++;
+        if (opaqueResp.type === 'opaque') {
+          isOpaque = true;
+          statusCode = 0;
+          opaqueCount++;
+        } else if (opaqueResp.ok) {
+          statusCode = opaqueResp.status || 200;
         } else {
           statusCode = opaqueResp.status || 0;
           if (!statusCode) errStr = 'Connection Error';
@@ -215,7 +222,7 @@ export async function executeBrowserLoadTest(params: {
       };
 
       try {
-        if (preferNoCors) {
+        if (preferNoCors && canUseNoCors) {
           await fetchOpaque();
         } else {
           try {
@@ -226,20 +233,24 @@ export async function executeBrowserLoadTest(params: {
               mode: 'cors',
               signal: controller.signal,
             });
-            statusCode = corsResp.status || 200;
+            statusCode = corsResp.status || 0;
             const buf = await corsResp.arrayBuffer();
             sizeBytes = buf.byteLength;
-          } catch (corsErr: any) {
-            if (corsErr?.name === 'AbortError') {
+          } catch (corsErr: unknown) {
+            if (corsErr instanceof Error && corsErr.name === 'AbortError') {
               throw corsErr;
             }
-            // Fallback to opaque no-cors timing when target endpoint does not send CORS headers
-            preferNoCors = true;
-            await fetchOpaque();
+            if (!canUseNoCors) {
+              errStr = `CORS blocked (${method} unsupported in no-CORS)`;
+            } else {
+              // Fallback to opaque no-cors timing when target endpoint does not send CORS headers
+              preferNoCors = true;
+              await fetchOpaque();
+            }
           }
         }
-      } catch (err: any) {
-        if (err?.name === 'AbortError') {
+      } catch (err: unknown) {
+        if (err instanceof Error && err.name === 'AbortError') {
           errStr = 'Timeout';
         } else {
           errStr = 'Connection Error';
@@ -256,6 +267,7 @@ export async function executeBrowserLoadTest(params: {
         bytes: sizeBytes,
         error: errStr,
         success: statusCode >= 200 && statusCode < 400,
+        ...(isOpaque ? { opaque: true } : {}),
       });
     }
   };
@@ -266,15 +278,19 @@ export async function executeBrowserLoadTest(params: {
   const totalDurationSec = Math.max(0.001, (performance.now() - totalStart) / 1000);
   results.sort((a, b) => a.id - b.id);
 
-  const latencies = results.filter(r => r.status_code > 0).map(r => r.duration_ms);
+  const latencies = results.filter(r => r.status_code > 0 || r.opaque).map(r => r.duration_ms);
   const successCount = results.filter(r => r.success).length;
-  const failCount = totalRequests - successCount;
+  const failCount = results.filter(r => !r.success && !r.opaque).length;
   const totalBytes = results.reduce((acc, r) => acc + r.bytes, 0);
 
   const statusDistribution: Record<string, number> = {};
-  const codeSummary = { '2xx': 0, '3xx': 0, '4xx': 0, '5xx': 0, errors: 0 };
+  const codeSummary: LoadTestCodeSummary = { '2xx': 0, '3xx': 0, '4xx': 0, '5xx': 0, errors: 0, opaque: 0 };
 
   for (const r of results) {
+    if (r.opaque) {
+      codeSummary.opaque = (codeSummary.opaque || 0) + 1;
+      continue;
+    }
     const code = r.status_code;
     if (code > 0) {
       statusDistribution[String(code)] = (statusDistribution[String(code)] || 0) + 1;
@@ -322,12 +338,12 @@ export async function executeBrowserLoadTest(params: {
   };
 }
 
-export async function fetchProxyStatus(): Promise<{ proxied: boolean; mode: string }> {
+export async function fetchProxyStatus(): Promise<ProxyStatus> {
   try {
     const base = getApiBaseUrl();
     const res = await fetch(`${base}/api/tools/proxy-status`, { method: 'GET', cache: 'no-store' });
     if (!res.ok) return { proxied: false, mode: 'browser-direct' };
-    return await res.json();
+    return (await res.json()) as ProxyStatus;
   } catch {
     return { proxied: false, mode: 'browser-direct' };
   }
@@ -341,7 +357,7 @@ export async function executeLoadTest(params: {
   method?: string;
   payload?: string;
   executionMode?: 'browser' | 'edge';
-}): Promise<any> {
+}): Promise<LoadTestResult> {
   // Default to Client Browser execution so the VPS origin IP never connects to external target URLs
   if (params.executionMode !== 'edge') {
     return executeBrowserLoadTest(params);
@@ -367,16 +383,16 @@ export async function executeLoadTest(params: {
   if (!response.ok) {
     let detail = 'Load test failed';
     try {
-      const err = await response.json();
+      const err = (await response.json()) as { detail?: string };
       detail = err.detail || detail;
     } catch {}
     throw new Error(detail);
   }
 
-  return response.json();
+  return (await response.json()) as LoadTestResult;
 }
 
-export async function fetchMyIp(customIp?: string): Promise<any> {
+export async function fetchMyIp(customIp?: string): Promise<IpDetailsResult> {
   const base = getApiBaseUrl();
   const query = customIp && customIp.trim() ? `?ip=${encodeURIComponent(customIp.trim())}` : '';
   const response = await fetch(`${base}/api/tools/my-ip${query}`, {
@@ -387,13 +403,13 @@ export async function fetchMyIp(customIp?: string): Promise<any> {
   if (!response.ok) {
     let detail = 'Could not fetch IP info';
     try {
-      const err = await response.json();
+      const err = (await response.json()) as { detail?: string };
       detail = err.detail || detail;
     } catch {}
     throw new Error(detail);
   }
 
-  const data = await response.json();
+  const data = (await response.json()) as IpDetailsResult;
 
   // If running on localhost and no custom IP was specified, try detecting public IP client-side
   // so the user sees their real public network details rather than 127.0.0.1 loopback.
@@ -401,14 +417,14 @@ export async function fetchMyIp(customIp?: string): Promise<any> {
     try {
       const ipifyRes = await fetch('https://api.ipify.org?format=json', { cache: 'no-store' });
       if (ipifyRes.ok) {
-        const ipifyData = await ipifyRes.json();
+        const ipifyData = (await ipifyRes.json()) as { ip?: string };
         if (ipifyData?.ip && ipifyData.ip !== data.ip) {
           const publicRes = await fetch(`${base}/api/tools/my-ip?ip=${encodeURIComponent(ipifyData.ip)}`, {
             method: 'GET',
             cache: 'no-store',
           });
           if (publicRes.ok) {
-            return await publicRes.json();
+            return (await publicRes.json()) as IpDetailsResult;
           }
         }
       }
@@ -420,7 +436,7 @@ export async function fetchMyIp(customIp?: string): Promise<any> {
   return data;
 }
 
-export async function analyzeDomainAuthority(domain: string): Promise<any> {
+export async function analyzeDomainAuthority(domain: string): Promise<DomainAuditResult> {
   const base = getApiBaseUrl();
   const response = await fetch(`${base}/api/tools/da-checker`, {
     method: 'POST',
@@ -431,11 +447,11 @@ export async function analyzeDomainAuthority(domain: string): Promise<any> {
   if (!response.ok) {
     let detail = 'Domain analysis failed';
     try {
-      const err = await response.json();
+      const err = (await response.json()) as { detail?: string };
       detail = err.detail || detail;
     } catch {}
     throw new Error(detail);
   }
 
-  return response.json();
+  return (await response.json()) as DomainAuditResult;
 }

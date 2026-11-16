@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useSyncExternalStore } from 'react';
 import {
   Copy,
   Check,
@@ -14,16 +14,38 @@ import {
   Search
 } from 'lucide-react';
 import { fetchMyIp } from '../lib/api';
+import { IpDetailsResult } from '../types';
+
+let cachedScreenInfo: { res: string; depth: number } | null = null;
+
+function subscribeScreen(callback: () => void) {
+  window.addEventListener('resize', callback);
+  return () => window.removeEventListener('resize', callback);
+}
+
+function getScreenSnapshot(): { res: string; depth: number } | null {
+  if (typeof window === 'undefined') return null;
+  const res = `${window.screen.width} × ${window.screen.height}`;
+  const depth = window.screen.colorDepth;
+  if (!cachedScreenInfo || cachedScreenInfo.res !== res || cachedScreenInfo.depth !== depth) {
+    cachedScreenInfo = { res, depth };
+  }
+  return cachedScreenInfo;
+}
+
+function getServerScreenSnapshot(): { res: string; depth: number } | null {
+  return null;
+}
 
 export const MyIpTool: React.FC = () => {
-  const [ipData, setIpData] = useState<any | null>(null);
+  const [ipData, setIpData] = useState<IpDetailsResult | null>(null);
   const [customIpInput, setCustomIpInput] = useState('');
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [pingMs, setPingMs] = useState<number | null>(null);
   const [isPinging, setIsPinging] = useState(false);
-  const [screenInfo, setScreenInfo] = useState<{ res: string; depth: number } | null>(null);
+  const screenInfo = useSyncExternalStore(subscribeScreen, getScreenSnapshot, getServerScreenSnapshot);
 
   const loadIpInfo = async (targetIp?: string) => {
     setIsLoading(true);
@@ -31,21 +53,30 @@ export const MyIpTool: React.FC = () => {
     try {
       const data = await fetchMyIp(targetIp);
       setIpData(data);
-    } catch (err: any) {
-      setError(err.message || 'Could not retrieve IP details');
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Could not retrieve IP details');
     } finally {
       setIsLoading(false);
     }
   };
 
   useEffect(() => {
-    loadIpInfo();
-    if (typeof window !== 'undefined') {
-      setScreenInfo({
-        res: `${window.screen.width} × ${window.screen.height}`,
-        depth: window.screen.colorDepth,
+    let cancelled = false;
+    fetchMyIp()
+      .then(data => {
+        if (!cancelled) setIpData(data);
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) {
+          setError(err instanceof Error ? err.message : 'Could not retrieve IP details');
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setIsLoading(false);
       });
-    }
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const handleCopyIp = () => {
@@ -329,7 +360,7 @@ export const MyIpTool: React.FC = () => {
             Received HTTP Request Headers
           </h3>
           <div className="max-h-56 overflow-y-auto rounded-lg bg-slate-950 p-3.5 font-mono text-[11px] text-slate-300 space-y-1 border border-slate-800">
-            {Object.entries(ipData.headers).map(([key, val]: [string, any]) => (
+            {Object.entries(ipData.headers).map(([key, val]) => (
               <div key={key} className="flex flex-col sm:flex-row sm:gap-2">
                 <span className="text-slate-400 shrink-0">{key}:</span>
                 <span className="text-slate-200 break-all">{String(val)}</span>

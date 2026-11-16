@@ -1,12 +1,13 @@
 import asyncio
 import ipaddress
+import json
 import re
 import socket
 import ssl
 import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 import httpx
 from bs4 import BeautifulSoup
@@ -36,6 +37,19 @@ STRIPPED_OUTBOUND_HEADERS = {
     "origin",
     "referer",
 }
+
+SENSITIVE_INCOMING_HEADERS = {
+    "cookie",
+    "set-cookie",
+    "authorization",
+    "proxy-authorization",
+    "x-api-key",
+    "x-relay-secret",
+    "cf-access-jwt-assertion",
+}
+
+MAX_LOAD_TEST_BODY_BYTES = 5 * 1024 * 1024  # 5 MB per request stream cap
+MAX_DA_HTML_BYTES = 2 * 1024 * 1024         # 2 MB cap for HTML / robots / sitemap
 
 _warp_cache: Dict[str, Any] = {"checked_at": 0.0, "available": False}
 
@@ -91,11 +105,12 @@ def get_active_outbound_shield() -> Dict[str, Any]:
         "proxy_url": None,
     }
 
-# Country Code to Flag Emoji helper
+
 def country_code_to_flag(country_code: str) -> str:
     if not country_code or len(country_code) != 2:
         return "🌐"
     return "".join(chr(127397 + ord(c.upper())) for c in country_code)
+
 
 def sanitize_error_msg(error_msg: str) -> str:
     """Strips local paths, internal IP patterns, and socket addresses to prevent server IP leakage."""
@@ -105,6 +120,7 @@ def sanitize_error_msg(error_msg: str) -> str:
     cleaned = re.sub(r'[A-Za-z]:\\[\w\\\.-]+', '[system-path]', cleaned)
     cleaned = re.sub(r'/[\w\.-]+/[\w\.-]+', '[system-path]', cleaned)
     return cleaned
+
 
 def is_safe_target_url(url: str) -> Tuple[bool, str, Optional[str]]:
     """
@@ -120,7 +136,6 @@ def is_safe_target_url(url: str) -> Tuple[bool, str, Optional[str]]:
         if not hostname:
             return False, "Invalid URL: hostname could not be parsed.", None
 
-        # Block obvious loopback/local names and self-hosted domains
         host_lower = hostname.lower()
         if host_lower in ("localhost", "127.0.0.1", "0.0.0.0", "::1", "local", "internal", "metadata.google.internal"):
             return False, "Access to localhost or loopback addresses is restricted for security.", None
@@ -159,16 +174,80 @@ def is_safe_target_url(url: str) -> Tuple[bool, str, Optional[str]]:
         return False, f"URL validation failed: {sanitize_error_msg(str(e))}", None
 
 
-def _make_ssrf_request_hook(initial_host: Optional[str]):
-    """Returns an httpx async request event hook that blocks SSRF via HTTP 301/302 redirects."""
-    async def _guard(request: httpx.Request):
-        req_host = (request.url.host or "").lower()
-        if initial_host and req_host == initial_host.lower():
-            return
-        safe, reason, _ = await asyncio.to_thread(is_safe_target_url, str(request.url))
+async def _safe_fetch_with_redirects(
+    client: httpx.AsyncClient,
+    target_url: str,
+    method: str = "GET",
+    base_headers: Optional[Dict[str, str]] = None,
+    custom_headers: Optional[Dict[str, str]] = None,
+    payload: Optional[str] = None,
+    timeout: float = 10.0,
+    relay_url: Optional[str] = None,
+    max_bytes: int = MAX_DA_HTML_BYTES,
+    max_redirects: int = 5,
+) -> Tuple[int, Dict[str, str], bytes, str, str]:
+    """
+    Executes an HTTP request with per-hop SSRF validation on redirects and bounded streaming reads.
+    Returns (status_code, lowercased_headers, body_bytes, final_url, http_version).
+    """
+    current_url = target_url
+    current_method = method
+
+    for hop in range(max_redirects + 1):
+        safe, reason, _ = await asyncio.to_thread(is_safe_target_url, current_url)
         if not safe:
-            raise ValueError(f"Blocked unsafe redirect target: {reason}")
-    return _guard
+            raise ValueError(f"Blocked unsafe target URL: {reason}" if hop == 0 else f"Blocked unsafe redirect target: {reason}")
+
+        req_headers = dict(base_headers or {})
+        if custom_headers:
+            if relay_url:
+                req_headers["X-Relay-Headers"] = json.dumps(custom_headers)
+            else:
+                req_headers.update(custom_headers)
+
+        dispatch_url = current_url
+        if relay_url:
+            req_headers["X-Target-URL"] = current_url
+            req_headers["X-Target-Method"] = current_method
+            if CF_WORKER_SECRET:
+                req_headers["X-Relay-Secret"] = CF_WORKER_SECRET
+            dispatch_url = relay_url
+
+        req_content = payload if current_method in ("POST", "PUT") else None
+
+        async with client.stream(
+            current_method,
+            dispatch_url,
+            headers=req_headers,
+            content=req_content,
+            timeout=timeout,
+            follow_redirects=False,
+        ) as resp:
+            status_code = resp.status_code
+            hdrs = {k.lower(): v for k, v in resp.headers.items()}
+            http_version = resp.http_version or "HTTP/1.1"
+
+            if status_code in (301, 302, 303, 307, 308) and hdrs.get("location"):
+                if hop >= max_redirects:
+                    raise ValueError("Too many HTTP redirects.")
+                current_url = urljoin(current_url, hdrs["location"])
+                if status_code == 303 or (status_code in (301, 302) and current_method == "POST"):
+                    current_method = "GET"
+                continue
+
+            chunks: List[bytes] = []
+            read_bytes = 0
+            async for chunk in resp.aiter_bytes():
+                if read_bytes >= max_bytes:
+                    break
+                remaining = max_bytes - read_bytes
+                piece = chunk[:remaining]
+                chunks.append(piece)
+                read_bytes += len(piece)
+
+            return status_code, hdrs, b"".join(chunks), current_url, http_version
+
+    raise ValueError("Too many HTTP redirects.")
 
 
 # ============================================================================
@@ -186,15 +265,14 @@ async def run_load_test(
 ) -> Dict[str, Any]:
     """
     Runs an asynchronous concurrent load test against the target URL.
-    Ensures VPS IP is never exposed in output metrics or logs.
+    Ensures VPS IP is never exposed in output metrics or logs and bounds memory usage.
     """
-    # Clamping for safety & rate control
     requests_count = max(1, min(100, requests_count))
     concurrency = max(1, min(20, concurrency))
     timeout = max(1.0, min(30.0, timeout))
     method = method.upper() if method.upper() in ("GET", "POST", "HEAD", "PUT") else "GET"
 
-    is_safe, reason, target_ip = await asyncio.to_thread(is_safe_target_url, url)
+    is_safe, reason, _ = await asyncio.to_thread(is_safe_target_url, url)
     if not is_safe:
         raise ValueError(reason)
 
@@ -202,25 +280,19 @@ async def run_load_test(
     relay_url = shield.get("relay_url")
     proxy_url = shield.get("proxy_url")
 
-    headers = {
+    base_headers = {
         "User-Agent": ANONYMOUS_USER_AGENT,
         "Accept": "*/*",
-        "Connection": "keep-alive"
+        "Connection": "keep-alive",
     }
+    sanitized_custom: Dict[str, str] = {}
     if custom_headers:
         for k, v in custom_headers.items():
             if k.lower().strip() not in STRIPPED_OUTBOUND_HEADERS:
-                headers[k] = v
-
-    if relay_url:
-        headers["X-Target-URL"] = url
-        headers["X-Target-Method"] = method
-        if CF_WORKER_SECRET:
-            headers["X-Relay-Secret"] = CF_WORKER_SECRET
+                sanitized_custom[k] = v
 
     semaphore = asyncio.Semaphore(concurrency)
     results: List[Dict[str, Any]] = []
-    request_target = relay_url if relay_url else url
 
     async def single_worker(req_id: int, client: httpx.AsyncClient):
         async with semaphore:
@@ -230,21 +302,23 @@ async def run_load_test(
             err_str = None
 
             try:
-                if method == "POST":
-                    resp = await client.post(request_target, content=payload, headers=headers, timeout=timeout)
-                elif method == "HEAD":
-                    resp = await client.head(request_target, headers=headers, timeout=timeout)
-                elif method == "PUT":
-                    resp = await client.put(request_target, content=payload, headers=headers, timeout=timeout)
-                else:
-                    resp = await client.get(request_target, headers=headers, timeout=timeout)
-
-                status_code = resp.status_code
-                size_bytes = len(resp.content)
+                status_code, _, body, _, _ = await _safe_fetch_with_redirects(
+                    client,
+                    url,
+                    method=method,
+                    base_headers=base_headers,
+                    custom_headers=sanitized_custom,
+                    payload=payload,
+                    timeout=timeout,
+                    relay_url=relay_url,
+                    max_bytes=MAX_LOAD_TEST_BODY_BYTES,
+                )
+                size_bytes = len(body)
             except httpx.TimeoutException:
                 err_str = "Timeout"
-            except httpx.ConnectError:
-                err_str = "Connection Error"
+            except httpx.ConnectError as ce:
+                msg = str(ce).lower()
+                err_str = "TLS Verification Error" if ("ssl" in msg or "cert" in msg) else "Connection Error"
             except httpx.HTTPError as he:
                 err_str = sanitize_error_msg(type(he).__name__)
             except Exception as ex:
@@ -257,15 +331,13 @@ async def run_load_test(
                 "duration_ms": req_duration_ms,
                 "bytes": size_bytes,
                 "error": err_str,
-                "success": status_code >= 200 and status_code < 400
+                "success": 200 <= status_code < 400,
             })
 
     total_start = time.perf_counter()
-    initial_host = urlparse(request_target).hostname
     client_kwargs: Dict[str, Any] = {
-        "verify": False,
-        "follow_redirects": True,
-        "event_hooks": {"request": [_make_ssrf_request_hook(initial_host)]},
+        "verify": True,
+        "follow_redirects": False,
     }
     if proxy_url:
         client_kwargs["proxy"] = proxy_url
@@ -277,13 +349,11 @@ async def run_load_test(
     total_duration_sec = max(0.001, time.perf_counter() - total_start)
     results.sort(key=lambda x: x["id"])
 
-    # Aggregate stats
     latencies = [r["duration_ms"] for r in results if r["status_code"] > 0]
     success_count = sum(1 for r in results if r["success"])
     fail_count = requests_count - success_count
     total_bytes = sum(r["bytes"] for r in results)
 
-    # Status breakdown
     status_distribution: Dict[str, int] = {}
     code_summary = {"2xx": 0, "3xx": 0, "4xx": 0, "5xx": 0, "errors": 0}
     for r in results:
@@ -334,11 +404,11 @@ async def run_load_test(
             "p90": round(percentile(0.90), 2),
             "p95": round(percentile(0.95), 2),
             "p99": round(percentile(0.99), 2),
-            "max": round(max(latencies_sorted), 2) if latencies else 0.0
+            "max": round(max(latencies_sorted), 2) if latencies else 0.0,
         },
         "code_summary": code_summary,
         "status_distribution": status_distribution,
-        "timeline": results[:100]  # Return per-request timeline data for SVG chart
+        "timeline": results[:100],
     }
 
 
@@ -376,7 +446,7 @@ async def get_ip_intel(client_ip: str) -> Dict[str, Any]:
     providers = [
         f"http://ip-api.com/json/{client_ip}?fields=status,message,country,countryCode,region,regionName,city,zip,lat,lon,timezone,isp,org,as,query",
         f"https://ipwho.is/{client_ip}",
-        f"https://ipapi.co/{client_ip}/json/"
+        f"https://ipapi.co/{client_ip}/json/",
     ]
 
     async with httpx.AsyncClient(timeout=3.5) as client:
@@ -386,7 +456,6 @@ async def get_ip_intel(client_ip: str) -> Dict[str, Any]:
                 if resp.status_code == 200:
                     data = resp.json()
 
-                    # 1. ip-api.com
                     if data.get("status") == "success" or "countryCode" in data:
                         country_code = data.get("countryCode", data.get("country_code", ""))
                         return {
@@ -405,7 +474,6 @@ async def get_ip_intel(client_ip: str) -> Dict[str, Any]:
                             "asn": data.get("as", data.get("asn", "N/A")),
                         }
 
-                    # 2. ipwho.is
                     if data.get("success") is True:
                         country_code = data.get("country_code", "")
                         conn = data.get("connection", {})
@@ -425,7 +493,6 @@ async def get_ip_intel(client_ip: str) -> Dict[str, Any]:
                             "asn": f"AS{conn.get('asn', '')} {conn.get('org', '')}".strip(),
                         }
 
-                    # 3. ipapi.co
                     if not data.get("error") and ("country_name" in data or "country_code" in data):
                         country_code = data.get("country_code", "")
                         return {
@@ -462,6 +529,7 @@ async def get_ip_intel(client_ip: str) -> Dict[str, Any]:
         "asn": "N/A",
     }
 
+
 async def get_my_ip_details(
     raw_ip: str,
     headers: Dict[str, str],
@@ -481,7 +549,6 @@ async def get_my_ip_details(
 
     geo = await get_ip_intel(raw_ip)
 
-    # Basic UA parsing
     ua_lower = user_agent.lower()
     browser = "Unknown Browser"
     if "chrome" in ua_lower and "edg" not in ua_lower and "opr" not in ua_lower:
@@ -514,7 +581,11 @@ async def get_my_ip_details(
         "client_browser": browser,
         "client_os": os_name,
         "user_agent": user_agent,
-        "headers": {k: v for k, v in headers.items() if not k.lower().startswith("cookie")}
+        "headers": {
+            k: v
+            for k, v in headers.items()
+            if k.lower() not in SENSITIVE_INCOMING_HEADERS and not k.lower().startswith("cookie")
+        },
     }
 
 
@@ -540,13 +611,13 @@ def get_ssl_cert_info(hostname: str) -> Dict[str, Any]:
                 days_left = (expiry_dt - datetime.now(timezone.utc)).days
 
             return {
-                "valid": True,
+                "valid": days_left >= 0,
                 "issuer": issuer_dict.get("organizationName") or issuer_dict.get("commonName", "Trusted CA"),
                 "subject": subject_dict.get("commonName", hostname),
                 "expiry_date": not_after_str,
                 "days_left": max(0, days_left),
                 "is_expired": days_left < 0,
-                "tls_version": s.version()
+                "tls_version": s.version(),
             }
     except Exception as e:
         return {
@@ -555,12 +626,13 @@ def get_ssl_cert_info(hostname: str) -> Dict[str, Any]:
             "issuer": "None / Invalid",
             "days_left": 0,
             "is_expired": True,
-            "tls_version": "None"
+            "tls_version": "None",
         }
+
 
 async def analyze_website_da(domain_or_url: str) -> Dict[str, Any]:
     """
-    Conducts an exhaustive Domain Authority, Page Authority, Security, and SEO analysis.
+    Conducts Domain Authority, Page Authority, Security, and SEO analysis with SSRF & byte bounds.
     """
     raw_input = domain_or_url.strip().lower()
     if not raw_input.startswith(("http://", "https://")):
@@ -569,9 +641,8 @@ async def analyze_website_da(domain_or_url: str) -> Dict[str, Any]:
         target_url = raw_input
 
     parsed = urlparse(target_url)
-    hostname = parsed.hostname or raw_input.split('/')[0]
+    hostname = parsed.hostname or raw_input.split("/")[0]
 
-    # Validate against SSRF
     is_safe, reason, resolved_ip = await asyncio.to_thread(is_safe_target_url, target_url)
     if not is_safe:
         raise ValueError(reason)
@@ -580,23 +651,6 @@ async def analyze_website_da(domain_or_url: str) -> Dict[str, Any]:
     relay_url = shield.get("relay_url")
     proxy_url = shield.get("proxy_url")
 
-    # 1. SSL Certificate Inspection
-    # If an outbound proxy or CF Worker relay is active, do NOT open a raw direct socket from the VPS
-    # (which would bypass the proxy and reveal the VPS IP). Instead, verify HTTPS via the proxied tunnel.
-    if shield.get("proxied"):
-        ssl_info = {
-            "valid": target_url.startswith("https://"),
-            "issuer": "Cloudflare / Trusted CA (Verified via Edge Relay)",
-            "subject": hostname,
-            "expiry_date": None,
-            "days_left": 90 if target_url.startswith("https://") else 0,
-            "is_expired": not target_url.startswith("https://"),
-            "tls_version": "TLSv1.3" if target_url.startswith("https://") else "None",
-        }
-    else:
-        ssl_info = await asyncio.to_thread(get_ssl_cert_info, hostname)
-
-    # 2. DNS Resolution
     dns_records: Dict[str, Any] = {"A": [], "IP": resolved_ip}
     try:
         host_info = await asyncio.to_thread(socket.gethostbyname_ex, hostname)
@@ -605,49 +659,97 @@ async def analyze_website_da(domain_or_url: str) -> Dict[str, Any]:
         if resolved_ip:
             dns_records["A"] = [resolved_ip]
 
-    # 3. HTTP Request & HTML Parsing
-    ttfb_ms = 0
-    html_content = ""
-    status_code = 0
-    response_headers: Dict[str, str] = {}
-    http_version = "HTTP/1.1"
-
-    headers_req = {
+    base_headers = {
         "User-Agent": ANONYMOUS_USER_AGENT,
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.9"
+        "Accept-Language": "en-US,en;q=0.9",
     }
-    if relay_url:
-        headers_req["X-Target-URL"] = target_url
-        headers_req["X-Target-Method"] = "GET"
-        if CF_WORKER_SECRET:
-            headers_req["X-Relay-Secret"] = CF_WORKER_SECRET
 
-    req_url = relay_url if relay_url else target_url
     client_kwargs: Dict[str, Any] = {
         "timeout": 10.0,
-        "follow_redirects": True,
-        "verify": False,
-        "event_hooks": {"request": [_make_ssrf_request_hook(urlparse(req_url).hostname)]},
+        "follow_redirects": False,
+        "verify": True,
     }
     if proxy_url:
         client_kwargs["proxy"] = proxy_url
 
+    ttfb_ms = 0.0
+    html_content = ""
+    status_code = 0
+    response_headers: Dict[str, str] = {}
+    http_version = "HTTP/1.1"
+    final_url = target_url
+
+    ssl_info: Dict[str, Any]
+    if not shield.get("proxied"):
+        ssl_info = await asyncio.to_thread(get_ssl_cert_info, hostname)
+        # If target TLS itself is invalid, fall back cleanly so on-page SEO can still report alongside SSL Invalid
+        if not ssl_info.get("valid") and target_url.startswith("https://"):
+            client_kwargs["verify"] = False
+
     try:
         t0 = time.perf_counter()
         async with httpx.AsyncClient(**client_kwargs) as client:
-            resp = await client.get(req_url, headers=headers_req)
+            status_code, response_headers, body_bytes, final_url, http_version = await _safe_fetch_with_redirects(
+                client,
+                target_url,
+                method="GET",
+                base_headers=base_headers,
+                timeout=10.0,
+                relay_url=relay_url,
+                max_bytes=MAX_DA_HTML_BYTES,
+            )
             ttfb_ms = round((time.perf_counter() - t0) * 1000, 1)
-            status_code = resp.status_code
-            html_content = resp.text
-            response_headers = {k.lower(): v for k, v in resp.headers.items()}
-            http_version = resp.http_version
+            html_content = body_bytes.decode("utf-8", errors="replace")
     except Exception as e:
         raise ValueError(f"Could not connect to website: {sanitize_error_msg(str(e))}")
 
+    if shield.get("proxied"):
+        is_https = final_url.startswith("https://") or target_url.startswith("https://")
+        relay_err = response_headers.get("x-relay-error", "")
+        if not is_https:
+            ssl_info = {
+                "valid": False,
+                "issuer": "No HTTPS",
+                "subject": hostname,
+                "expiry_date": None,
+                "days_left": 0,
+                "is_expired": True,
+                "tls_version": "None",
+            }
+        elif status_code in (525, 526) or relay_err == "tls":
+            ssl_info = {
+                "valid": False,
+                "issuer": f"Invalid / Untrusted Certificate (Edge TLS HTTP {status_code})",
+                "subject": hostname,
+                "expiry_date": None,
+                "days_left": 0,
+                "is_expired": True,
+                "tls_version": "Failed",
+            }
+        elif status_code >= 500:
+            ssl_info = {
+                "valid": False,
+                "issuer": f"Origin / TLS Unreachable (HTTP {status_code})",
+                "subject": hostname,
+                "expiry_date": None,
+                "days_left": None,
+                "is_expired": False,
+                "tls_version": "Unverified",
+            }
+        else:
+            ssl_info = {
+                "valid": True,
+                "issuer": "Trusted CA (Verified via Edge TLS)",
+                "subject": hostname,
+                "expiry_date": None,
+                "days_left": None,
+                "is_expired": False,
+                "tls_version": "TLS 1.2 / 1.3",
+            }
+
     soup = BeautifulSoup(html_content, "html.parser")
 
-    # 4. On-Page SEO Extraction
     title_tag = soup.find("title")
     title_text = title_tag.get_text(strip=True) if title_tag else ""
 
@@ -657,9 +759,13 @@ async def analyze_website_da(domain_or_url: str) -> Dict[str, Any]:
         meta_desc = desc_tag["content"].strip()
 
     canonical_url = ""
-    canon_tag = soup.find("link", attrs={"rel": "canonical"})
-    if canon_tag and canon_tag.get("href"):
-        canonical_url = canon_tag["href"].strip()
+    for link_tag in soup.find_all("link"):
+        rels = link_tag.get("rel") or []
+        if isinstance(rels, str):
+            rels = rels.split()
+        if any(r.lower() == "canonical" for r in rels) and link_tag.get("href"):
+            canonical_url = link_tag["href"].strip()
+            break
 
     h1_tags = [h.get_text(strip=True) for h in soup.find_all("h1") if h.get_text(strip=True)]
     h2_count = len(soup.find_all("h2"))
@@ -670,73 +776,81 @@ async def analyze_website_da(domain_or_url: str) -> Dict[str, Any]:
     images_without_alt = sum(1 for img in images if not img.get("alt") or not img.get("alt").strip())
 
     og_title = ""
-    og_tag = soup.find("meta", property="og:title")
+    og_tag = soup.find("meta", property=re.compile(r"^og:title$", re.I))
     if og_tag and og_tag.get("content"):
         og_title = og_tag["content"]
 
     og_image = ""
-    og_img_tag = soup.find("meta", property="og:image")
+    og_img_tag = soup.find("meta", property=re.compile(r"^og:image$", re.I))
     if og_img_tag and og_img_tag.get("content"):
         og_image = og_img_tag["content"]
 
-    viewport_tag = soup.find("meta", attrs={"name": "viewport"})
+    viewport_tag = soup.find("meta", attrs={"name": re.compile(r"^viewport$", re.I)})
     has_viewport = bool(viewport_tag)
 
-    # Word count estimation (strip script/style/noscript tags first for accurate visible copy count)
     for invisible in soup(["script", "style", "noscript", "template"]):
         invisible.decompose()
     text_content = soup.get_text(separator=" ", strip=True)
     words = [w for w in text_content.split() if len(w) > 1]
     word_count = len(words)
 
-    # 5. Technical Files Probe (robots.txt & sitemap.xml with HTTP/HTTPS fallback)
+    # Probe robots.txt (and extract declared Sitemap directives) + /sitemap.xml
     robots_ok = False
     sitemap_ok = False
+    declared_sitemaps: List[str] = []
     target_scheme = parsed.scheme if parsed.scheme in ("http", "https") else "https"
-    schemes_to_try = [target_scheme]
-    if target_scheme == "https":
-        schemes_to_try.append("http")
+    schemes_to_try = [target_scheme] + (["http"] if target_scheme == "https" else [])
 
     probe_kwargs: Dict[str, Any] = {
-        "timeout": 3.5,
-        "verify": False,
-        "follow_redirects": True,
-        "event_hooks": {"request": [_make_ssrf_request_hook(urlparse(req_url).hostname)]},
+        "timeout": 4.0,
+        "follow_redirects": False,
+        "verify": True if shield.get("proxied") or ssl_info.get("valid") else False,
     }
     if proxy_url:
         probe_kwargs["proxy"] = proxy_url
+
+    probe_headers = {"User-Agent": ANONYMOUS_USER_AGENT}
 
     async with httpx.AsyncClient(**probe_kwargs) as client:
         for proto in schemes_to_try:
             if not robots_ok:
                 try:
                     p_url = f"{proto}://{hostname}/robots.txt"
-                    p_headers = {"User-Agent": ANONYMOUS_USER_AGENT}
-                    if relay_url:
-                        p_headers["X-Target-URL"] = p_url
-                        if CF_WORKER_SECRET:
-                            p_headers["X-Relay-Secret"] = CF_WORKER_SECRET
-                    r_resp = await client.get(relay_url if relay_url else p_url, headers=p_headers)
-                    if r_resp.status_code == 200 and len(r_resp.text) > 5 and not r_resp.text.strip().lower().startswith("<!doctype"):
+                    r_status, _, r_body, _, _ = await _safe_fetch_with_redirects(
+                        client, p_url, base_headers=probe_headers, timeout=4.0, relay_url=relay_url, max_bytes=512 * 1024
+                    )
+                    r_text = r_body.decode("utf-8", errors="replace")
+                    if r_status == 200 and len(r_text) > 5 and not r_text.strip().lower().startswith("<!doctype"):
                         robots_ok = True
+                        declared_sitemaps.extend(re.findall(r"(?im)^\s*sitemap:\s*(\S+)", r_text))
                 except Exception:
                     pass
 
             if not sitemap_ok:
                 try:
                     s_url = f"{proto}://{hostname}/sitemap.xml"
-                    s_headers = {"User-Agent": ANONYMOUS_USER_AGENT}
-                    if relay_url:
-                        s_headers["X-Target-URL"] = s_url
-                        if CF_WORKER_SECRET:
-                            s_headers["X-Relay-Secret"] = CF_WORKER_SECRET
-                    s_resp = await client.get(relay_url if relay_url else s_url, headers=s_headers)
-                    if s_resp.status_code == 200 and ("<urlset" in s_resp.text or "<sitemapindex" in s_resp.text):
+                    s_status, _, s_body, _, _ = await _safe_fetch_with_redirects(
+                        client, s_url, base_headers=probe_headers, timeout=4.0, relay_url=relay_url, max_bytes=MAX_DA_HTML_BYTES
+                    )
+                    s_text = s_body.decode("utf-8", errors="replace")
+                    if s_status == 200 and ("<urlset" in s_text or "<sitemapindex" in s_text):
                         sitemap_ok = True
                 except Exception:
                     pass
 
-    # 6. Security Headers Scorecard
+        if not sitemap_ok and declared_sitemaps:
+            for sm_url in declared_sitemaps[:3]:
+                try:
+                    s_status, _, s_body, _, _ = await _safe_fetch_with_redirects(
+                        client, sm_url, base_headers=probe_headers, timeout=4.0, relay_url=relay_url, max_bytes=MAX_DA_HTML_BYTES
+                    )
+                    s_text = s_body.decode("utf-8", errors="replace")
+                    if s_status == 200 and ("<urlset" in s_text or "<sitemapindex" in s_text):
+                        sitemap_ok = True
+                        break
+                except Exception:
+                    continue
+
     sec_headers = {
         "Strict-Transport-Security": "strict-transport-security" in response_headers,
         "Content-Security-Policy": "content-security-policy" in response_headers,
@@ -747,12 +861,8 @@ async def analyze_website_da(domain_or_url: str) -> Dict[str, Any]:
     }
     sec_header_score = sum(1 for present in sec_headers.values() if present)
 
-    # 7. Algorithmic DA / PA / Spam Calculation
-    # DA Formula Heuristic based on Moz/OpenRank weights:
-    da_score = 30  # Baseline
-    tld = hostname.split('.')[-1]
-
-    # TLD prestige
+    da_score = 30
+    tld = hostname.split(".")[-1]
     if tld in ("edu", "gov"):
         da_score += 35
     elif tld in ("org", "io", "ai", "co", "dev"):
@@ -762,9 +872,8 @@ async def analyze_website_da(domain_or_url: str) -> Dict[str, Any]:
     elif tld in ("info", "xyz", "top", "online", "club"):
         da_score -= 8
 
-    # Short domain bonus (strip leading www. before measuring main label length)
     clean_host = hostname[4:] if hostname.startswith("www.") else hostname
-    domain_length = len(clean_host.split('.')[0])
+    domain_length = len(clean_host.split(".")[0])
     if domain_length <= 5:
         da_score += 12
     elif domain_length <= 8:
@@ -772,18 +881,16 @@ async def analyze_website_da(domain_or_url: str) -> Dict[str, Any]:
     elif domain_length > 20:
         da_score -= 6
 
-    # SSL & Security bonus
     if ssl_info.get("valid"):
         da_score += 10
-        if ssl_info.get("days_left", 0) > 30:
+        days_left = ssl_info.get("days_left")
+        if days_left is None or days_left > 30:
             da_score += 5
     else:
         da_score -= 15
 
     if sec_header_score >= 3:
         da_score += 8
-
-    # Content richness & SEO bonus
     if title_text and 10 <= len(title_text) <= 70:
         da_score += 5
     if meta_desc and 50 <= len(meta_desc) <= 165:
@@ -798,19 +905,14 @@ async def analyze_website_da(domain_or_url: str) -> Dict[str, Any]:
         da_score += 3
     if canonical_url:
         da_score += 3
-
-    # Fast response bonus
     if ttfb_ms < 300:
         da_score += 5
     elif ttfb_ms > 1200:
         da_score -= 5
 
     da_score = max(1, min(99, da_score))
-
-    # Page Authority (PA)
     pa_score = max(1, min(99, int(da_score * 0.92 + (5 if len(h1_tags) == 1 else 0) + (3 if og_title else 0))))
 
-    # Spam Risk (1% to 100%)
     spam_score = 2
     if not ssl_info.get("valid"):
         spam_score += 35
@@ -824,7 +926,6 @@ async def analyze_website_da(domain_or_url: str) -> Dict[str, Any]:
         spam_score += 8
     spam_score = max(1, min(95, spam_score))
 
-    # Overall SEO Health Grade
     seo_score = 0
     if title_text:
         seo_score += 15 if 10 <= len(title_text) <= 70 else 8
@@ -852,12 +953,17 @@ async def analyze_website_da(domain_or_url: str) -> Dict[str, Any]:
     seo_score = max(5, min(100, seo_score))
     grade = "A+" if seo_score >= 95 else "A" if seo_score >= 85 else "B" if seo_score >= 70 else "C" if seo_score >= 55 else "D" if seo_score >= 40 else "F"
 
-    # Actionable Recommendations
     recommendations = []
     if not ssl_info.get("valid"):
         recommendations.append({"type": "critical", "title": "Missing or Invalid SSL", "desc": "Enable HTTPS with a valid SSL/TLS certificate to protect users and boost rank."})
     else:
-        recommendations.append({"type": "passed", "title": "Valid SSL Certificate", "desc": f"Protected by {ssl_info.get('issuer')} ({ssl_info.get('days_left')} days remaining)."})
+        days_rem = ssl_info.get("days_left")
+        ssl_desc = (
+            f"Protected by {ssl_info.get('issuer')} ({days_rem} days remaining)."
+            if days_rem is not None
+            else f"Protected by {ssl_info.get('issuer')}."
+        )
+        recommendations.append({"type": "passed", "title": "Valid SSL Certificate", "desc": ssl_desc})
 
     if not title_text:
         recommendations.append({"type": "critical", "title": "Missing Title Tag", "desc": "Add a unique descriptive <title> tag (between 30-60 characters)."})
@@ -908,12 +1014,12 @@ async def analyze_website_da(domain_or_url: str) -> Dict[str, Any]:
             "spam_score": spam_score,
             "seo_health": seo_score,
             "grade": grade,
-            "da_rating": "Top Authority" if da_score >= 80 else "High Authority" if da_score >= 60 else "Moderate" if da_score >= 40 else "Growing / New"
+            "da_rating": "Top Authority" if da_score >= 80 else "High Authority" if da_score >= 60 else "Moderate" if da_score >= 40 else "Growing / New",
         },
         "serp_preview": {
             "title": title_text or f"{hostname} - Official Website",
             "url": target_url,
-            "snippet": meta_desc or f"Explore {hostname}. Discover features, services, and official content available on {hostname}."
+            "snippet": meta_desc or f"Explore {hostname}. Discover features, services, and official content available on {hostname}.",
         },
         "on_page_seo": {
             "title": title_text,
@@ -931,7 +1037,7 @@ async def analyze_website_da(domain_or_url: str) -> Dict[str, Any]:
             "has_viewport": has_viewport,
             "has_opengraph": bool(og_title or og_image),
             "og_title": og_title,
-            "og_image": og_image
+            "og_image": og_image,
         },
         "ssl": ssl_info,
         "security_headers": sec_headers,
@@ -940,7 +1046,7 @@ async def analyze_website_da(domain_or_url: str) -> Dict[str, Any]:
             "sitemap_xml": sitemap_ok,
             "dns_a_records": dns_records.get("A", []),
             "server_ip": dns_records.get("IP", "N/A"),
-            "encoding": response_headers.get("content-encoding", "identity")
+            "encoding": response_headers.get("content-encoding", "identity"),
         },
-        "recommendations": recommendations
+        "recommendations": recommendations,
     }

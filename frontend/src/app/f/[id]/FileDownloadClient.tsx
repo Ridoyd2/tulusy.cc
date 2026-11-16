@@ -107,10 +107,13 @@ export const FileDownloadClient: React.FC<{ initialFile: FileInfo | null; fileId
 
       const contentType = resp.headers.get('content-type');
       if (contentType && contentType.includes('application/json')) {
-        const data = await resp.json();
+        const data = (await resp.json()) as { download_url?: string; filename?: string };
         if (data.download_url) {
+          const resolvedUrl = data.download_url.startsWith('http')
+            ? data.download_url
+            : `${apiUrl}${data.download_url}`;
           const a = document.createElement('a');
-          a.href = data.download_url;
+          a.href = resolvedUrl;
           a.download = data.filename || file.filename || 'download';
           document.body.appendChild(a);
           a.click();
@@ -133,8 +136,8 @@ export const FileDownloadClient: React.FC<{ initialFile: FileInfo | null; fileId
       if (file.is_burn_after_reading) {
         setBurnedAfterDownload(true);
       }
-    } catch (err: any) {
-      setErrorMessage(err.message || 'Error downloading file.');
+    } catch (err: unknown) {
+      setErrorMessage(err instanceof Error ? err.message : 'Error downloading file.');
     } finally {
       setIsDownloading(false);
     }

@@ -1,8 +1,11 @@
 'use client';
 
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo } from 'react';
 import { Search, X, Check } from 'lucide-react';
 import { ALL_FORMATS, getCompatibleTargets } from '../lib/formatRegistry';
+import { FormatCategory } from '../types';
+
+type CategoryFilter = 'all' | FormatCategory;
 
 interface FormatModalProps {
   isOpen: boolean;
@@ -13,8 +16,13 @@ interface FormatModalProps {
   mode?: 'source' | 'target';
 }
 
-export const FormatModal: React.FC<FormatModalProps> = ({
-  isOpen,
+export const FormatModal: React.FC<FormatModalProps> = (props) => {
+  if (!props.isOpen) return null;
+  const resetKey = `${props.sourceExt || 'all'}-${props.mode || 'target'}`;
+  return <FormatModalBody key={resetKey} {...props} />;
+};
+
+const FormatModalBody: React.FC<FormatModalProps> = ({
   onClose,
   onSelect,
   sourceExt,
@@ -22,14 +30,7 @@ export const FormatModal: React.FC<FormatModalProps> = ({
   mode = 'target',
 }) => {
   const [search, setSearch] = useState('');
-  const [activeCategory, setActiveCategory] = useState<string>('all');
-
-  useEffect(() => {
-    if (isOpen) {
-      setSearch('');
-      setActiveCategory('all');
-    }
-  }, [isOpen, sourceExt, mode]);
+  const [activeCategory, setActiveCategory] = useState<CategoryFilter>('all');
 
   const baseFormats = useMemo(() => {
     if (mode === 'source') return ALL_FORMATS;
@@ -37,15 +38,15 @@ export const FormatModal: React.FC<FormatModalProps> = ({
   }, [sourceExt, mode]);
 
   const availableCategories = useMemo(() => {
-    const cats = new Set(baseFormats.map(f => f.category));
-    const allTabs = [
+    const cats = new Set<FormatCategory>(baseFormats.map(f => f.category));
+    const allTabs: Array<{ id: CategoryFilter; label: string }> = [
       { id: 'all', label: 'All Formats' },
       { id: 'image', label: 'Images' },
       { id: 'document', label: 'Documents' },
       { id: 'vector', label: 'Vectors' },
       { id: 'icon', label: 'Icons' },
     ];
-    return allTabs.filter(t => t.id === 'all' || cats.has(t.id as any));
+    return allTabs.filter(t => t.id === 'all' || cats.has(t.id));
   }, [baseFormats]);
 
   const availableFormats = useMemo(() => {
@@ -67,8 +68,6 @@ export const FormatModal: React.FC<FormatModalProps> = ({
 
     return list;
   }, [baseFormats, search, activeCategory]);
-
-  if (!isOpen) return null;
 
   return (
     <div
