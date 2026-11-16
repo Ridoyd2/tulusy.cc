@@ -1,0 +1,21 @@
+[
+  {
+    "AllowedOrigins": [
+      "https://tulusy.cc",
+      "https://www.tulusy.cc"
+    ],
+    "AllowedMethods": [
+      "PUT",
+      "GET",
+      "HEAD"
+    ],
+    "AllowedHeaders": [
+      "Content-Type"
+    ],
+    "ExposeHeaders": [
+      "ETag",
+      "Content-Disposition"
+    ],
+    "MaxAgeSeconds": 3600
+  }
+]

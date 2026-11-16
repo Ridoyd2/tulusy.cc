@@ -1,0 +1,13 @@
+{
+  "name": "tulusy",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Tulusy Universal Converter & 5GB Anonymous Drop",
+  "scripts": {
+    "postinstall": "npm --prefix frontend install --include=dev --no-audit --no-fund",
+    "dev": "npm run dev --prefix frontend",
+    "build": "npm run build --prefix frontend",
+    "start": "npm run start --prefix frontend",
+    "lint": "npm run lint --prefix frontend"
+  }
+}
