@@ -4,7 +4,7 @@ import uvicorn
 if __name__ == "__main__":
     app_env = os.getenv("APP_ENV", "development").strip().lower()
     host = os.getenv("UVICORN_HOST", "127.0.0.1").strip()
-    port = int(os.getenv("UVICORN_PORT", "8000").strip() or "8000")
+    port = int(os.getenv("UVICORN_PORT", "8480").strip() or "8480")
     workers = int(os.getenv("UVICORN_WORKERS", "1").strip() or "1")
     reload_flag = (
         os.getenv("UVICORN_RELOAD", "false" if app_env == "production" else "true").lower()

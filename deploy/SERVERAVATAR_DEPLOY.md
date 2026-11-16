@@ -22,13 +22,13 @@ In **Cloudflare Dashboard -> R2 -> Bucket (`tulusy`) -> Settings -> CORS Policy*
    - **Domain**: `tulusy.cc` (and add `www.tulusy.cc` as alias/redirect if desired)
    - **Deployment**: Git -> GitHub -> `Ridoyd2/tulusy.cc` (`main` branch)
    - **Process Manager**: PM2
-   - **Port**: `3000`
+   - **Port**: `3480`
    - **Build Command**: `npm install && npm run build`
    - **Start Command**: `npm start`
 3. Add environment variables inside `frontend/.env.production` (or ServerAvatar's Node environment settings):
    ```env
    NEXT_PUBLIC_SITE_URL=https://tulusy.cc
-   BACKEND_URL=http://127.0.0.1:8000
+   BACKEND_URL=http://127.0.0.1:8480
    NEXT_PUBLIC_API_URL=
    ```
 4. Enable **Let's Encrypt SSL** in ServerAvatar (`tulusy.cc` + `www.tulusy.cc`).
@@ -49,13 +49,13 @@ nano /path/to/repo/backend/.env
 Fill in your `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET_NAME=tulusy`, and restart:
 ```bash
 sudo systemctl restart tulusy-backend
-curl -s http://127.0.0.1:8000/api/health
+curl -s http://127.0.0.1:8480/api/health
 ```
 
 ---
 
 ## 5. Route `/api/*` Directly to FastAPI in ServerAvatar Nginx
-In ServerAvatar -> Application (`tulusy.cc`) -> **Nginx Settings / Custom Configuration**, add the rules from `deploy/nginx-serveravatar-api.conf` inside the `server` block so `/api/*` bypasses Next.js and streams up to 110 MB directly to `127.0.0.1:8000` with 300s timeouts and real `X-Real-IP` / `X-Forwarded-For` headers.
+In ServerAvatar -> Application (`tulusy.cc`) -> **Nginx Settings / Custom Configuration**, add the rules from `deploy/nginx-serveravatar-api.conf` inside the `server` block so `/api/*` bypasses Next.js and streams up to 110 MB directly to `127.0.0.1:8480` with 300s timeouts and real `X-Real-IP` / `X-Forwarded-For` headers.
 
 Test and reload Nginx:
 ```bash

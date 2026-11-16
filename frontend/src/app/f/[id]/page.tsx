@@ -9,7 +9,7 @@ interface PageProps {
 
 async function getFileInfo(id: string) {
   try {
-    const apiUrl = process.env.BACKEND_URL || process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000';
+    const apiUrl = process.env.BACKEND_URL || process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8480';
     const resp = await fetch(`${apiUrl}/api/hosting/info/${id}`, {
       cache: 'no-store',
     });

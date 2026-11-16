@@ -8,14 +8,14 @@ export function getApiBaseUrl(): string {
   if (typeof window !== 'undefined') {
     const { protocol, hostname, port } = window.location;
     if (
-      (port === '3000' || port === '3001') &&
+      (port === '3000' || port === '3001' || port === '3480') &&
       (hostname === 'localhost' || hostname === '127.0.0.1')
     ) {
-      return `${protocol}//${hostname}:8000`;
+      return `${protocol}//${hostname}:8480`;
     }
     return '';
   }
-  return 'http://127.0.0.1:8000';
+  return 'http://127.0.0.1:8480';
 }
 
 export async function checkServerHealth(): Promise<boolean> {

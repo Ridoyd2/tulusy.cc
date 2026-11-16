@@ -38,7 +38,7 @@ DEFAULT_HOSTING_EXPIRY_DAYS = 1  # 24 Hours (1 Day) default expiration
 _default_origins = (
     "https://tulusy.cc,https://www.tulusy.cc"
     if APP_ENV == "production"
-    else "https://tulusy.cc,https://www.tulusy.cc,http://localhost:3000,http://127.0.0.1:3000"
+    else "https://tulusy.cc,https://www.tulusy.cc,http://localhost:3000,http://127.0.0.1:3000,http://localhost:3480,http://127.0.0.1:3480"
 )
 ALLOWED_ORIGINS = [
     origin.strip().rstrip("/")

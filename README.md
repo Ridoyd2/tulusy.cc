@@ -43,15 +43,15 @@ cd backend
 python -m pip install -r requirements.txt
 python run.py
 ```
-*Backend runs at `http://127.0.0.1:8000` (Swagger docs at `http://127.0.0.1:8000/docs`)*
+*Backend runs at `http://127.0.0.1:8480` (Swagger docs at `http://127.0.0.1:8480/docs`)*
 
 ### 2. Start the Frontend (Next.js)
 ```bash
 cd frontend
 npm install
-npm run dev
+npm run dev -- -p 3480
 ```
-*Frontend runs at `http://localhost:3000`*
+*Frontend runs at `http://localhost:3480`*
 
 ### 3. One-Command Launcher (PowerShell)
 You can also launch both servers together:
