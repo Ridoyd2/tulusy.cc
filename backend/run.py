@@ -1,5 +1,12 @@
 import os
+from pathlib import Path
 import uvicorn
+
+try:
+    from dotenv import load_dotenv
+    load_dotenv(Path(__file__).resolve().parent / ".env")
+except ImportError:
+    pass
 
 if __name__ == "__main__":
     app_env = os.getenv("APP_ENV", "development").strip().lower()

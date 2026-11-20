@@ -1,8 +1,8 @@
 import asyncio
 import ipaddress
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Literal, Optional
 from fastapi import APIRouter, HTTPException, Query, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app.config import PROTECT_VPS_IP
 from app.services.web_tools_service import (
@@ -16,17 +16,54 @@ router = APIRouter(prefix="/api/tools", tags=["Web & Network Utilities"])
 
 
 class LoadTestRequest(BaseModel):
-    url: str = Field(..., description="Target website or API endpoint (http/https)")
+    url: str = Field(..., min_length=4, max_length=2048, description="Target website or API endpoint (http/https)")
     requests_count: int = Field(20, ge=1, le=100, description="Total number of requests to execute (1-100)")
     concurrency: int = Field(5, ge=1, le=20, description="Simultaneous concurrent connections (1-20)")
     timeout: float = Field(10.0, ge=1.0, le=30.0, description="Per-request timeout in seconds")
-    method: str = Field("GET", description="HTTP Method (GET, POST, HEAD, PUT)")
+    method: Literal["GET", "POST", "HEAD", "PUT"] = Field("GET", description="HTTP Method (GET, POST, HEAD, PUT)")
     custom_headers: Optional[Dict[str, str]] = Field(None, description="Custom request headers")
-    payload: Optional[str] = Field(None, description="Request body payload for POST/PUT")
+    payload: Optional[str] = Field(None, max_length=1_000_000, description="Request body payload for POST/PUT")
+
+    @field_validator("method", mode="before")
+    @classmethod
+    def _normalize_method(cls, v: Any) -> str:
+        return str(v or "GET").strip().upper()
+
+    @field_validator("custom_headers")
+    @classmethod
+    def _validate_headers(cls, v: Optional[Dict[str, str]]) -> Optional[Dict[str, str]]:
+        if v is None:
+            return None
+        if len(v) > 30:
+            raise ValueError("At most 30 custom headers are allowed.")
+        for k, val in v.items():
+            if len(str(k)) > 128 or len(str(val)) > 4096 or "\n" in str(k) or "\r" in str(k) or "\n" in str(val) or "\r" in str(val):
+                raise ValueError("Invalid custom header name or value.")
+        return v
 
 
 class DaCheckRequest(BaseModel):
-    domain: str = Field(..., description="Domain name or website URL (e.g., example.com)")
+    domain: str = Field(..., min_length=1, max_length=2048, description="Domain name or website URL (e.g., example.com)")
+
+
+def _is_public_prod_request(request: Request) -> bool:
+    host_header = (request.headers.get("host") or "").split(":")[0].lower().rstrip(".")
+    return bool(
+        request.headers.get("cf-connecting-ip")
+        or request.headers.get("x-forwarded-for")
+        or (host_header and host_header not in ("127.0.0.1", "localhost", "testserver", "::1"))
+    )
+
+
+def _extract_valid_ip_candidate(raw: Optional[str]) -> Optional[str]:
+    if not raw or not raw.strip():
+        return None
+    candidate = raw.strip()
+    try:
+        ipaddress.ip_address(candidate)
+        return candidate
+    except ValueError:
+        return None
 
 
 @router.get("/proxy-status")
@@ -46,14 +83,7 @@ async def load_test_endpoint(request: Request, req: LoadTestRequest):
     Never exposes internal VPS or server IP to external target sites in production.
     """
     shield = await asyncio.to_thread(get_active_outbound_shield)
-    host_header = (request.headers.get("host") or "").split(":")[0].lower()
-    is_public_prod = bool(
-        request.headers.get("cf-connecting-ip")
-        or request.headers.get("x-forwarded-for")
-        or (host_header and host_header not in ("127.0.0.1", "localhost", "testserver", "::1"))
-    )
-
-    if PROTECT_VPS_IP and is_public_prod and not shield.get("proxied"):
+    if PROTECT_VPS_IP and _is_public_prod_request(request) and not shield.get("proxied"):
         raise HTTPException(
             status_code=403,
             detail=(
@@ -86,26 +116,19 @@ async def my_ip_endpoint(request: Request, ip: Optional[str] = Query(None, descr
     """
     try:
         if ip and ip.strip():
-            candidate = ip.strip()
-            try:
-                ipaddress.ip_address(candidate)
-                client_ip = candidate
-            except ValueError:
-                raise HTTPException(status_code=400, detail=f"Invalid IP address format: '{candidate}'")
+            candidate = _extract_valid_ip_candidate(ip)
+            if not candidate:
+                raise HTTPException(status_code=400, detail=f"Invalid IP address format: '{ip.strip()}'")
+            client_ip = candidate
         else:
-            # Determine client IP from proxy headers or direct connection
             forwarded_for = request.headers.get("x-forwarded-for")
-            cf_connecting_ip = request.headers.get("cf-connecting-ip")
-            real_ip = request.headers.get("x-real-ip")
-
-            if cf_connecting_ip:
-                client_ip = cf_connecting_ip.strip()
-            elif forwarded_for:
-                client_ip = forwarded_for.split(",")[0].strip()
-            elif real_ip:
-                client_ip = real_ip.strip()
-            else:
-                client_ip = request.client.host if request.client else "127.0.0.1"
+            first_xff = forwarded_for.split(",")[0] if forwarded_for else None
+            client_ip = (
+                _extract_valid_ip_candidate(request.headers.get("cf-connecting-ip"))
+                or _extract_valid_ip_candidate(first_xff)
+                or _extract_valid_ip_candidate(request.headers.get("x-real-ip"))
+                or (request.client.host if request.client else "127.0.0.1")
+            )
 
         user_agent = request.headers.get("user-agent", "Unknown Browser")
         headers_dict = dict(request.headers)
@@ -118,11 +141,21 @@ async def my_ip_endpoint(request: Request, ip: Optional[str] = Query(None, descr
         raise HTTPException(status_code=500, detail=f"Could not retrieve IP details: {str(e)}")
 
 @router.post("/da-checker")
-async def da_checker_endpoint(req: DaCheckRequest):
+async def da_checker_endpoint(request: Request, req: DaCheckRequest):
     """
     Analyzes Domain Authority (DA 1-100), Page Authority (PA), Spam Score,
     SSL Certificate, Security Headers, and On-Page SEO audit.
     """
+    shield = await asyncio.to_thread(get_active_outbound_shield)
+    if PROTECT_VPS_IP and _is_public_prod_request(request) and not shield.get("proxied"):
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "Direct server outbound connections are disabled to protect the VPS origin IP. "
+                "Enable `CF_WORKER_RELAY_URL`, `OUTBOUND_PROXY_URL`, or Cloudflare WARP (`warp-cli mode proxy`) on the server."
+            ),
+        )
+
     try:
         analysis = await analyze_website_da(req.domain)
         return analysis

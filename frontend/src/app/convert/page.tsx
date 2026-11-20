@@ -4,7 +4,7 @@ import { ArrowRight } from 'lucide-react';
 import { Navbar } from '@/components/Navbar';
 import { Footer } from '@/components/Footer';
 import { getConverterDirectoryGroups, getAllSEOSlugs } from '@/lib/seoData';
-import { SITE_URL } from '@/lib/site';
+import { safeJsonLd, SITE_ROOT_URL, SITE_URL } from '@/lib/site';
 
 const totalPairs = getAllSEOSlugs().length;
 const directoryTitle = `All File Converters - ${totalPairs}+ Free Tools`;
@@ -28,6 +28,7 @@ export const metadata: Metadata = {
     description: directoryDescription,
     url: `${SITE_URL}/convert`,
     siteName: 'Tulusy',
+    locale: 'en_US',
     type: 'website',
   },
   twitter: {
@@ -39,6 +40,7 @@ export const metadata: Metadata = {
 
 export default function ConvertDirectoryPage() {
   const groups = getConverterDirectoryGroups();
+  const allPairs = groups.flatMap(g => g.pairs);
 
   const collectionSchema = {
     '@context': 'https://schema.org',
@@ -46,6 +48,19 @@ export default function ConvertDirectoryPage() {
     name: directoryTitle,
     description: directoryDescription,
     url: `${SITE_URL}/convert`,
+    publisher: {
+      '@id': `${SITE_URL}/#organization`,
+    },
+    mainEntity: {
+      '@type': 'ItemList',
+      numberOfItems: allPairs.length,
+      itemListElement: allPairs.map((pair, idx) => ({
+        '@type': 'ListItem',
+        position: idx + 1,
+        name: `${pair.source.toUpperCase()} to ${pair.target.toUpperCase()}`,
+        url: `${SITE_URL}/convert/${pair.slug}`,
+      })),
+    },
   };
 
   const breadcrumbSchema = {
@@ -56,7 +71,7 @@ export default function ConvertDirectoryPage() {
         '@type': 'ListItem',
         position: 1,
         name: 'Home',
-        item: `${SITE_URL}/`,
+        item: SITE_ROOT_URL,
       },
       {
         '@type': 'ListItem',
@@ -71,11 +86,11 @@ export default function ConvertDirectoryPage() {
     <>
       <script
         type="application/ld+json"
-        dangerouslySetInnerHTML={{ __html: JSON.stringify(collectionSchema) }}
+        dangerouslySetInnerHTML={{ __html: safeJsonLd(collectionSchema) }}
       />
       <script
         type="application/ld+json"
-        dangerouslySetInnerHTML={{ __html: JSON.stringify(breadcrumbSchema) }}
+        dangerouslySetInnerHTML={{ __html: safeJsonLd(breadcrumbSchema) }}
       />
 
       <div className="min-h-screen flex flex-col">

@@ -47,7 +47,11 @@ export const Navbar: React.FC<NavbarProps> = ({
 
   const toggleTheme = () => {
     const nextTheme = theme === 'dark' ? 'light' : 'dark';
-    localStorage.setItem('theme', nextTheme);
+    try {
+      localStorage.setItem('theme', nextTheme);
+    } catch {
+      // Ignore storage access errors in private browsing/restricted contexts
+    }
     if (nextTheme === 'dark') {
       document.documentElement.classList.add('dark');
       document.documentElement.classList.remove('light');
@@ -127,7 +131,7 @@ export const Navbar: React.FC<NavbarProps> = ({
               { src: 'png', fmt: 'webp', accept: 'image/*,.heic,.psd,.tga', label: 'Image → WebP' },
               { src: 'pdf', fmt: 'docx', accept: '.pdf,application/pdf', label: 'PDF → Word' },
               { src: 'pdf', fmt: 'pptx', accept: '.pdf,application/pdf', label: 'PDF → PPTX' },
-              { src: 'xlsx', fmt: 'pdf', accept: '.xlsx,.xls,.csv', label: 'Spreadsheet → PDF' },
+              { src: 'xlsx', fmt: 'pdf', accept: '.xlsx,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv', label: 'Spreadsheet → PDF' },
               { src: 'png', fmt: 'ico', accept: 'image/*', label: 'PNG → ICO' },
               { src: 'png', fmt: 'pdf', accept: 'image/*', label: 'Images → PDF' },
             ].map((preset, i) => (

@@ -204,6 +204,7 @@ export function buildSeoMetadata({
       description,
       url: canonicalUrl,
       siteName: 'Tulusy',
+      locale: 'en_US',
       type: 'website',
     },
     twitter: {

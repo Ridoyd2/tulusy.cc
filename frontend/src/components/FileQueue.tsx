@@ -51,7 +51,7 @@ export const FileQueue: React.FC<FileQueueProps> = ({
   const completedCount = items.filter(i => i.status === 'completed').length;
   const allCompleted = completedCount === items.length && items.length > 0;
   const allImages = items.every(i =>
-    ['png', 'jpg', 'jpeg', 'webp', 'avif', 'bmp', 'tiff', 'gif', 'heic', 'heif'].includes(
+    ['png', 'jpg', 'jpeg', 'webp', 'avif', 'bmp', 'tiff', 'tif', 'gif', 'heic', 'heif', 'svg', 'psd', 'tga', 'ico'].includes(
       i.sourceExt.toLowerCase()
     )
   );

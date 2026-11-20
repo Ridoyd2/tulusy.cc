@@ -113,12 +113,13 @@ const SettingsModalBody: React.FC<SettingsModalProps> = ({
                   max="16384"
                   placeholder="Original"
                   value={settings.width || ''}
-                  onChange={e =>
+                  onChange={e => {
+                    const parsed = parseInt(e.target.value, 10);
                     setSettings({
                       ...settings,
-                      width: e.target.value ? Math.max(1, parseInt(e.target.value, 10)) : undefined,
-                    })
-                  }
+                      width: Number.isFinite(parsed) ? Math.min(16384, Math.max(1, parsed)) : undefined,
+                    });
+                  }}
                   className="w-full mt-1 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-slate-900 dark:text-slate-100 placeholder-slate-400 focus:outline-none focus:border-blue-600 tabular-nums"
                 />
               </div>
@@ -130,12 +131,13 @@ const SettingsModalBody: React.FC<SettingsModalProps> = ({
                   max="16384"
                   placeholder="Original"
                   value={settings.height || ''}
-                  onChange={e =>
+                  onChange={e => {
+                    const parsed = parseInt(e.target.value, 10);
                     setSettings({
                       ...settings,
-                      height: e.target.value ? Math.max(1, parseInt(e.target.value, 10)) : undefined,
-                    })
-                  }
+                      height: Number.isFinite(parsed) ? Math.min(16384, Math.max(1, parsed)) : undefined,
+                    });
+                  }}
                   className="w-full mt-1 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-slate-900 dark:text-slate-100 placeholder-slate-400 focus:outline-none focus:border-blue-600 tabular-nums"
                 />
               </div>

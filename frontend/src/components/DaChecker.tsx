@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import {
   Search,
   RefreshCw,
@@ -25,21 +25,29 @@ export const DaChecker: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [data, setData] = useState<DomainAuditResult | null>(null);
   const [activeTab, setActiveTab] = useState<AuditTab>('seo');
+  const requestSeqRef = useRef(0);
 
   const handleAnalyze = async (targetDomain?: string) => {
     const input = (targetDomain || domain).trim();
     if (!input) return;
 
+    const mySeq = ++requestSeqRef.current;
     setIsLoading(true);
     setError(null);
 
     try {
       const res = await analyzeDomainAuthority(input);
-      setData(res);
+      if (mySeq === requestSeqRef.current) {
+        setData(res);
+      }
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : 'Domain analysis failed');
+      if (mySeq === requestSeqRef.current) {
+        setError(err instanceof Error ? err.message : 'Domain analysis failed');
+      }
     } finally {
-      setIsLoading(false);
+      if (mySeq === requestSeqRef.current) {
+        setIsLoading(false);
+      }
     }
   };
 
@@ -105,11 +113,12 @@ export const DaChecker: React.FC = () => {
             <button
               key={site}
               type="button"
+              disabled={isLoading}
               onClick={() => {
                 setDomain(site);
                 handleAnalyze(site);
               }}
-              className="px-2.5 py-1 rounded-md bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300 font-mono text-[11px] transition-colors cursor-pointer"
+              className="px-2.5 py-1 rounded-md bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300 font-mono text-[11px] transition-colors cursor-pointer disabled:opacity-50"
             >
               {site}
             </button>

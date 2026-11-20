@@ -40,7 +40,13 @@ async def test_suite():
     assert unsafe_self is False, "Self-domain tulusy.com should be blocked"
     unsafe_cc, reason_cc, _ = is_safe_target_url("https://tulusy.cc/api/health")
     assert unsafe_cc is False, "Self-domain tulusy.cc should be blocked"
-    print(f"[PASS] Self-domains blocked: {reason_self} | {reason_cc}")
+    unsafe_dot, _, _ = is_safe_target_url("https://tulusy.cc./api/health")
+    assert unsafe_dot is False, "Trailing-dot self-domain tulusy.cc. should be blocked"
+    unsafe_cgnat, _, _ = is_safe_target_url("http://100.64.0.1/status")
+    assert unsafe_cgnat is False, "CGNAT 100.64.0.1 should be blocked"
+    unsafe_v6_mapped, _, _ = is_safe_target_url("http://[::ffff:127.0.0.1]/")
+    assert unsafe_v6_mapped is False, "IPv4-mapped loopback ::ffff:127.0.0.1 should be blocked"
+    print(f"[PASS] Self-domains, trailing-dot, CGNAT & IPv6-mapped SSRF blocked: {reason_self} | {reason_cc}")
 
     assert "tulusy" not in ANONYMOUS_USER_AGENT.lower() and "toolsy4u" not in ANONYMOUS_USER_AGENT.lower(), "Outbound User-Agent must not leak service identity"
     shield = get_active_outbound_shield()
@@ -134,7 +140,18 @@ async def test_suite():
             res_down = await analyze_website_da("https://example.com")
             assert res_down["ssl"]["valid"] is False, "HTTPS->HTTP downgrade must not claim valid SSL"
             assert res_down["ssl"]["issuer"] == "No HTTPS"
-    print("[PASS] Proxied Relay 526 TLS invalid, downgrade handling, & neutral days_left verified")
+
+        async def mock_da_upstream_err(*args, **kwargs):
+            return 502, {"x-relay-error": "upstream"}, b'{"error":"Upstream connection failed"}', "https://example.com", "HTTP/2"
+
+        with patch("app.services.web_tools_service._safe_fetch_with_redirects", side_effect=mock_da_upstream_err):
+            upstream_raised = False
+            try:
+                await analyze_website_da("example.com")
+            except ValueError as ve:
+                upstream_raised = "upstream" in str(ve).lower()
+            assert upstream_raised, "DA Checker must raise ValueError on X-Relay-Error: upstream (HTTP 502)"
+    print("[PASS] Proxied Relay 526 TLS invalid, downgrade handling, upstream error rejection & neutral days_left verified")
 
     # 7. Test My-IP Sensitive Header Redaction
     print("\n--- 7. Testing My-IP Header Redaction ---")
@@ -153,6 +170,46 @@ async def test_suite():
         assert forbidden not in returned_hdrs, f"Sensitive header leaked: {forbidden}"
     assert "accept-language" in returned_hdrs
     print("[PASS] Sensitive incoming headers redacted from /my-ip response")
+
+    # 8. Test iOS User-Agent OS detection & DA Checker URL case preservation + PROTECT_VPS_IP
+    ios_ua = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) CriOS/124.0.0.0 Mobile/15E148 Safari/604.1"
+    ios_res = await get_my_ip_details("127.0.0.1", {"user-agent": ios_ua}, ios_ua)
+    assert ios_res["client_os"] == "iOS", f"Expected iOS, got {ios_res['client_os']}"
+    assert ios_res["client_browser"] == "Google Chrome", f"Expected Chrome (CriOS), got {ios_res['client_browser']}"
+
+    seen_urls = []
+    async def capture_case_url(client, target_url, *args, **kwargs):
+        seen_urls.append(target_url)
+        return 200, {}, b"<html><title>Case Check</title><h1>Ok</h1></html>", target_url, "HTTP/2"
+
+    with patch("app.services.web_tools_service.get_active_outbound_shield", return_value={"proxied": True, "mode": "cloudflare-worker", "relay_url": "https://relay.example.invalid", "proxy_url": None}):
+        with patch("app.services.web_tools_service._safe_fetch_with_redirects", side_effect=capture_case_url):
+            da_case = await analyze_website_da("https://Example.COM/MixedCasePath?Token=AbC")
+            assert seen_urls[0] == "https://example.com/MixedCasePath?Token=AbC", f"Path case altered: {seen_urls[0]}"
+            assert da_case["server"] == "Not disclosed", f"Expected 'Not disclosed' server, got {da_case['server']}"
+
+    from fastapi.testclient import TestClient
+    from app.main import app
+    client = TestClient(app)
+    with patch("app.routers.web_tools.get_active_outbound_shield", return_value={"proxied": False, "mode": "browser-direct"}):
+        da_blocked = client.post(
+            "/api/tools/da-checker",
+            json={"domain": "example.com"},
+            headers={"Host": "tulusy.cc"},
+        )
+        assert da_blocked.status_code == 403, f"Expected 403 when unproxied in prod, got {da_blocked.status_code}"
+
+    # 9. Verify CF Worker Relay transport error headers become connection/TLS errors (not 5xx)
+    async def mock_relay_upstream_err(*args, **kwargs):
+        return 502, {"x-relay-error": "upstream"}, b"{}", "https://example.com", "HTTP/2"
+
+    with patch("app.services.web_tools_service.get_active_outbound_shield", return_value={"proxied": True, "mode": "cloudflare-worker", "relay_url": "https://relay.example.invalid", "proxy_url": None}):
+        with patch("app.services.web_tools_service._safe_fetch_with_redirects", side_effect=mock_relay_upstream_err):
+            relay_load = await run_load_test("https://example.com", requests_count=2, concurrency=1)
+            assert relay_load["code_summary"]["errors"] == 2
+            assert relay_load["code_summary"]["5xx"] == 0
+            assert relay_load["timeline"][0]["error"] == "Connection Error"
+    print("[PASS] iOS UA detection, DA path case preservation, neutral Server header, PROTECT_VPS_IP & relay errors verified")
 
     print("\n[SUCCESS] ALL WEB TOOLS TESTS PASSED WITH 100% SUCCESS!\n")
 

@@ -23,7 +23,8 @@ export function getApiBaseUrl(): string {
     }
     return '';
   }
-  return 'http://127.0.0.1:8480';
+  const serverBase = process.env.BACKEND_URL || 'http://127.0.0.1:8480';
+  return serverBase.replace(/\/+$/, '');
 }
 
 export async function checkServerHealth(): Promise<boolean> {
@@ -121,7 +122,14 @@ export async function mergeImagesToPdf(
   });
 
   if (!response.ok) {
-    throw new Error('Images to PDF merger failed');
+    let errorDetail = 'Images to PDF merger failed';
+    try {
+      const errJson = (await response.json()) as { detail?: string };
+      errorDetail = errJson.detail || errorDetail;
+    } catch {
+      errorDetail = `Images to PDF merger failed (status ${response.status})`;
+    }
+    throw new Error(errorDetail);
   }
 
   const blob = await response.blob();
@@ -160,10 +168,14 @@ export async function executeBrowserLoadTest(params: {
     throw new Error('Only HTTP and HTTPS protocols are supported.');
   }
 
-  const hostLower = parsedUrl.hostname.toLowerCase();
-  const protectedDomains = ['tulusy.cc', 'tulusy.com', 'toolsy4u.com', SITE_DOMAIN.toLowerCase()];
+  const hostLower = parsedUrl.hostname.toLowerCase().replace(/^\[|\]$/g, '').replace(/\.+$/, '');
+  const protectedDomains = ['tulusy.cc', 'tulusy.com', 'toolsy4u.com', SITE_DOMAIN.toLowerCase().replace(/\.+$/, '')];
   if (
+    !hostLower ||
     hostLower === 'localhost' ||
+    hostLower.endsWith('.localhost') ||
+    hostLower.endsWith('.local') ||
+    hostLower.endsWith('.internal') ||
     hostLower === '127.0.0.1' ||
     hostLower === '0.0.0.0' ||
     hostLower === '::1' ||
@@ -188,15 +200,18 @@ export async function executeBrowserLoadTest(params: {
   const runWorker = async () => {
     while (nextId <= totalRequests) {
       const reqId = nextId++;
-      const reqStart = performance.now();
+      let reqStart = performance.now();
       let statusCode = 0;
       let sizeBytes = 0;
       let errStr: string | null = null;
       let isOpaque = false;
 
-      const benchUrl = params.cacheBust
-        ? `${targetUrl}${targetUrl.includes('?') ? '&' : '?'}_t=${Date.now()}_${reqId}`
-        : targetUrl;
+      let benchUrl = targetUrl;
+      if (params.cacheBust) {
+        const cacheUrl = new URL(targetUrl);
+        cacheUrl.searchParams.set('_t', `${Date.now()}_${reqId}`);
+        benchUrl = cacheUrl.toString();
+      }
 
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -245,6 +260,7 @@ export async function executeBrowserLoadTest(params: {
             } else {
               // Fallback to opaque no-cors timing when target endpoint does not send CORS headers
               preferNoCors = true;
+              reqStart = performance.now();
               await fetchOpaque();
             }
           }
@@ -434,6 +450,16 @@ export async function fetchMyIp(customIp?: string): Promise<IpDetailsResult> {
   }
 
   return data;
+}
+
+export async function measureApiRtt(): Promise<number> {
+  const base = getApiBaseUrl();
+  const t0 = performance.now();
+  const res = await fetch(`${base}/api/health`, { method: 'GET', cache: 'no-store' });
+  if (!res.ok) {
+    throw new Error(`Health check failed with status ${res.status}`);
+  }
+  return Math.round(performance.now() - t0);
 }
 
 export async function analyzeDomainAuthority(domain: string): Promise<DomainAuditResult> {

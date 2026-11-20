@@ -28,9 +28,11 @@ MAX_FILE_SIZE = max(1, _max_file_mb) * 1024 * 1024
 
 # Safety caps against decompression/PDF page-explosion DoS
 MAX_IMAGE_DIMENSION = int(os.getenv("MAX_IMAGE_DIMENSION", "16384").strip() or "16384")
+MAX_IMAGE_FRAMES = int(os.getenv("MAX_IMAGE_FRAMES", "300").strip() or "300")
 MAX_PDF_PAGES = int(os.getenv("MAX_PDF_PAGES", "200").strip() or "200")
 MAX_XLSX_PDF_ROWS = int(os.getenv("MAX_XLSX_PDF_ROWS", "5000").strip() or "5000")
 MAX_TXT_PDF_LINES = int(os.getenv("MAX_TXT_PDF_LINES", "10000").strip() or "10000")
+TEMP_FILE_TTL_SECONDS = int(os.getenv("TEMP_FILE_TTL_SECONDS", "3600").strip() or "3600")
 
 # Maximum file hosting size: 5GB
 MAX_HOSTING_FILE_SIZE = 5 * 1024 * 1024 * 1024  # 5 GB in bytes
@@ -66,7 +68,7 @@ CF_WORKER_SECRET = os.getenv("CF_WORKER_SECRET", "").strip()
 PROTECT_VPS_IP = os.getenv("PROTECT_VPS_IP", "true").lower() in ("true", "1", "yes")
 
 _extra_protected = {
-    d.strip().lower()
+    d.strip().lower().rstrip(".")
     for d in os.getenv("PROTECTED_DOMAINS", "").split(",")
     if d.strip()
 }
@@ -90,6 +92,13 @@ SUPPORTED_IMAGE_FORMATS = [
     "png", "jpg", "jpeg", "webp", "avif", "gif", "bmp", "tiff", "ico",
     "svg", "heic", "heif", "psd", "tga", "pdf"
 ]
+
+WRITABLE_IMAGE_FORMATS = {
+    "png", "jpg", "jpeg", "webp", "avif", "gif", "bmp", "tiff", "tif",
+    "ico", "svg", "heic", "heif", "tga", "pdf"
+}
+
+LEGACY_UNSUPPORTED_DOC_FORMATS = {"doc", "ppt", "xls"}
 
 SUPPORTED_DOC_FORMATS = [
     "pdf", "docx", "pptx", "txt", "xlsx", "csv"

@@ -1,10 +1,10 @@
 import type { Metadata } from 'next';
 import { HomeClient } from '@/components/HomeClient';
-import { SITE_URL } from '@/lib/site';
+import { safeJsonLd, SITE_ROOT_URL, SITE_URL } from '@/lib/site';
 
 export const metadata: Metadata = {
   alternates: {
-    canonical: SITE_URL,
+    canonical: SITE_ROOT_URL,
   },
 };
 
@@ -13,10 +13,13 @@ export default function HomePage() {
     '@context': 'https://schema.org',
     '@type': 'WebApplication',
     name: 'Tulusy Universal File Converter',
-    url: SITE_URL,
+    url: SITE_ROOT_URL,
     applicationCategory: 'UtilitiesApplication',
     operatingSystem: 'All',
     browserRequirements: 'Requires JavaScript. Requires HTML5.',
+    publisher: {
+      '@id': `${SITE_URL}/#organization`,
+    },
     offers: {
       '@type': 'Offer',
       price: '0',
@@ -30,7 +33,7 @@ export default function HomePage() {
     <>
       <script
         type="application/ld+json"
-        dangerouslySetInnerHTML={{ __html: JSON.stringify(webAppSchema) }}
+        dangerouslySetInnerHTML={{ __html: safeJsonLd(webAppSchema) }}
       />
       <HomeClient />
     </>

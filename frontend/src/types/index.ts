@@ -192,6 +192,7 @@ export interface UploadSessionData {
   file_id: string;
   filename: string;
   file_size: number;
+  content_type?: string;
   upload_url: string;
   upload_mode: 'single' | 'multipart';
   storage_type: 'r2' | 'local';

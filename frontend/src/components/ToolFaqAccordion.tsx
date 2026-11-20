@@ -24,6 +24,7 @@ export const ToolFaqAccordion: React.FC<ToolFaqAccordionProps> = ({ faqs }) => {
             <div key={idx} className="panel rounded-xl overflow-hidden">
               <button
                 type="button"
+                aria-expanded={isOpen}
                 onClick={() => setOpenIdx(isOpen ? null : idx)}
                 className="w-full p-4 text-left flex items-center justify-between gap-4 font-medium text-xs sm:text-sm text-slate-900 dark:text-white cursor-pointer"
               >

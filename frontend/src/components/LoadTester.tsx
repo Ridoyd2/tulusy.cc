@@ -213,22 +213,25 @@ export const LoadTester: React.FC = () => {
               <span className="text-slate-400 text-[11px]">Profiles:</span>
               <button
                 type="button"
+                disabled={isLoading}
                 onClick={() => applyPreset('https://httpbin.org/get', 10, 2)}
-                className="px-2.5 py-1 rounded-md bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300 text-[11px] font-medium transition-colors cursor-pointer"
+                className="px-2.5 py-1 rounded-md bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300 text-[11px] font-medium transition-colors cursor-pointer disabled:opacity-50"
               >
                 Light Probe (10 / 2c)
               </button>
               <button
                 type="button"
+                disabled={isLoading}
                 onClick={() => applyPreset('https://example.com', 50, 5)}
-                className="px-2.5 py-1 rounded-md bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300 text-[11px] font-medium transition-colors cursor-pointer"
+                className="px-2.5 py-1 rounded-md bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300 text-[11px] font-medium transition-colors cursor-pointer disabled:opacity-50"
               >
                 Standard (50 / 5c)
               </button>
               <button
                 type="button"
+                disabled={isLoading}
                 onClick={() => applyPreset('https://httpbin.org/get', 100, 10)}
-                className="px-2.5 py-1 rounded-md bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300 text-[11px] font-medium transition-colors cursor-pointer"
+                className="px-2.5 py-1 rounded-md bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300 text-[11px] font-medium transition-colors cursor-pointer disabled:opacity-50"
               >
                 Burst (100 / 10c)
               </button>
@@ -321,7 +324,7 @@ export const LoadTester: React.FC = () => {
             </div>
 
             <div className="panel p-4 rounded-xl space-y-1">
-              {(results.opaque_responses ?? 0) > 0 && results.successful_requests === 0 ? (
+              {(results.opaque_responses ?? 0) > 0 ? (
                 <>
                   <span className="text-xs text-slate-500 dark:text-slate-400">Reachability</span>
                   <p className="text-base sm:text-lg font-bold font-mono text-sky-600 dark:text-sky-400 tabular-nums pt-0.5">
@@ -329,6 +332,7 @@ export const LoadTester: React.FC = () => {
                   </p>
                   <p className="text-[11px] text-slate-400 font-mono tabular-nums truncate">
                     {results.opaque_responses}/{results.total_requests} No-CORS
+                    {results.successful_requests > 0 ? ` · ${results.successful_requests} OK` : ''}
                     {results.failed_requests > 0 ? ` · ${results.failed_requests} err` : ' · Status hidden'}
                   </p>
                 </>

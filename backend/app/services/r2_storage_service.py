@@ -2,12 +2,12 @@ import hashlib
 import hmac
 import math
 import mimetypes
+import re
 import secrets
 import shutil
 import sqlite3
 import time
 from contextlib import contextmanager
-from pathlib import Path
 from typing import Any, Dict, List, Optional
 from urllib.parse import quote
 
@@ -31,6 +31,8 @@ DB_PATH = BASE_DIR / "data" / "file_host.db"
 LEGACY_PASSWORD_SALT = "tulusy_anon_salt_2026"
 BURN_PURGE_GRACE_SECONDS = 1800  # Matches presigned GET URL ExpiresIn (30 minutes)
 MULTIPART_THRESHOLD_BYTES = 64 * 1024 * 1024  # 64 MB
+SINGLE_PUT_MAX_BYTES = 4_800_000_000  # Keep safe margin below R2 5,000,000,000-byte single PUT limit
+_MIME_RE = re.compile(r"^[a-zA-Z0-9!#$&^_.+-]+/[a-zA-Z0-9!#$&^_.+-]+$")
 
 
 @contextmanager
@@ -51,61 +53,71 @@ def get_db():
 def init_db():
     """Initializes SQLite database tables, indexes, and idempotent schema migrations."""
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with get_db() as conn:
-        conn.execute("PRAGMA journal_mode=WAL")
-        cursor = conn.cursor()
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS hosted_files (
-                id TEXT PRIMARY KEY,
-                original_name TEXT NOT NULL,
-                file_size INTEGER NOT NULL,
-                content_type TEXT NOT NULL,
-                storage_type TEXT NOT NULL,
-                storage_key TEXT NOT NULL,
-                created_at INTEGER NOT NULL,
-                expires_at INTEGER NOT NULL,
-                delete_token TEXT NOT NULL,
-                downloads_count INTEGER DEFAULT 0,
-                max_downloads INTEGER DEFAULT 0,
-                password_hash TEXT DEFAULT '',
-                is_deleted INTEGER DEFAULT 0,
-                purge_after INTEGER DEFAULT 0,
-                upload_confirmed INTEGER DEFAULT 1
-            )
-        """)
+    for attempt in range(5):
+        try:
+            with get_db() as conn:
+                conn.execute("PRAGMA journal_mode=WAL")
+                cursor = conn.cursor()
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS hosted_files (
+                        id TEXT PRIMARY KEY,
+                        original_name TEXT NOT NULL,
+                        file_size INTEGER NOT NULL,
+                        content_type TEXT NOT NULL,
+                        storage_type TEXT NOT NULL,
+                        storage_key TEXT NOT NULL,
+                        created_at INTEGER NOT NULL,
+                        expires_at INTEGER NOT NULL,
+                        delete_token TEXT NOT NULL,
+                        downloads_count INTEGER DEFAULT 0,
+                        max_downloads INTEGER DEFAULT 0,
+                        password_hash TEXT DEFAULT '',
+                        is_deleted INTEGER DEFAULT 0,
+                        purge_after INTEGER DEFAULT 0,
+                        upload_confirmed INTEGER DEFAULT 1,
+                        multipart_upload_id TEXT DEFAULT ''
+                    )
+                """)
 
-        existing_cols = {
-            row[1] for row in cursor.execute("PRAGMA table_info(hosted_files)").fetchall()
-        }
-        if "purge_after" not in existing_cols:
-            cursor.execute("ALTER TABLE hosted_files ADD COLUMN purge_after INTEGER DEFAULT 0")
-        if "upload_confirmed" not in existing_cols:
-            cursor.execute("ALTER TABLE hosted_files ADD COLUMN upload_confirmed INTEGER DEFAULT 1")
+                existing_cols = {
+                    row[1] for row in cursor.execute("PRAGMA table_info(hosted_files)").fetchall()
+                }
+                if "purge_after" not in existing_cols:
+                    cursor.execute("ALTER TABLE hosted_files ADD COLUMN purge_after INTEGER DEFAULT 0")
+                if "upload_confirmed" not in existing_cols:
+                    cursor.execute("ALTER TABLE hosted_files ADD COLUMN upload_confirmed INTEGER DEFAULT 1")
+                if "multipart_upload_id" not in existing_cols:
+                    cursor.execute("ALTER TABLE hosted_files ADD COLUMN multipart_upload_id TEXT DEFAULT ''")
 
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS file_reports (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                file_id TEXT NOT NULL,
-                reason TEXT NOT NULL,
-                created_at INTEGER NOT NULL
-            )
-        """)
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS download_tokens (
-                token TEXT PRIMARY KEY,
-                file_id TEXT NOT NULL,
-                expires_at INTEGER NOT NULL
-            )
-        """)
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS maintenance_state (
-                key TEXT PRIMARY KEY,
-                updated_at INTEGER NOT NULL
-            )
-        """)
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_expires_at ON hosted_files(expires_at)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_is_deleted ON hosted_files(is_deleted)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_purge_after ON hosted_files(purge_after)")
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS file_reports (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        file_id TEXT NOT NULL,
+                        reason TEXT NOT NULL,
+                        created_at INTEGER NOT NULL
+                    )
+                """)
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS download_tokens (
+                        token TEXT PRIMARY KEY,
+                        file_id TEXT NOT NULL,
+                        expires_at INTEGER NOT NULL
+                    )
+                """)
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS maintenance_state (
+                        key TEXT PRIMARY KEY,
+                        updated_at INTEGER NOT NULL
+                    )
+                """)
+                cursor.execute("CREATE INDEX IF NOT EXISTS idx_expires_at ON hosted_files(expires_at)")
+                cursor.execute("CREATE INDEX IF NOT EXISTS idx_is_deleted ON hosted_files(is_deleted)")
+                cursor.execute("CREATE INDEX IF NOT EXISTS idx_purge_after ON hosted_files(purge_after)")
+            return
+        except sqlite3.OperationalError:
+            if attempt == 4:
+                raise
+            time.sleep(0.1 * (attempt + 1))
 
 
 init_db()
@@ -183,6 +195,27 @@ def _build_content_disposition(filename: str) -> str:
     return f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{encoded_name}"
 
 
+def sanitize_content_type(content_type: Optional[str], safe_name: str) -> str:
+    """Validates and normalizes a Content-Type header value, preventing header injection."""
+    if content_type:
+        base_type = content_type.split(";", 1)[0].strip().lower()
+        if len(base_type) <= 128 and _MIME_RE.fullmatch(base_type):
+            return base_type
+    guessed_type, _ = mimetypes.guess_type(safe_name)
+    return guessed_type or "application/octet-stream"
+
+
+def _allocate_unique_file_id() -> str:
+    """Generates a unique file ID that does not collide with existing rows."""
+    with get_db() as conn:
+        for _ in range(10):
+            candidate = generate_file_id()
+            exists = conn.execute("SELECT 1 FROM hosted_files WHERE id = ?", (candidate,)).fetchone()
+            if not exists:
+                return candidate
+    raise RuntimeError("Could not allocate unique file ID.")
+
+
 def create_upload_session(
     filename: str,
     file_size: int,
@@ -209,7 +242,7 @@ def create_upload_session(
     if not is_extension_allowed(safe_name):
         raise ValueError("Executable files are restricted for security.")
 
-    file_id = generate_file_id()
+    file_id = _allocate_unique_file_id()
     delete_token = secrets.token_hex(16)
     created_at = int(time.time())
 
@@ -221,8 +254,7 @@ def create_upload_session(
         expiry_days = max(1, min(7, expiry_days))
         expires_at = created_at + (expiry_days * 86400)
 
-    guessed_type, _ = mimetypes.guess_type(safe_name)
-    final_content_type = content_type or guessed_type or "application/octet-stream"
+    final_content_type = sanitize_content_type(content_type, safe_name)
 
     password_hash = hash_password(password.strip()) if password and password.strip() else ""
 
@@ -232,10 +264,11 @@ def create_upload_session(
 
     upload_url = f"/api/hosting/upload-direct/{file_id}"
     upload_mode = "single"
+    multipart_upload_id = ""
     multipart_data: Dict[str, Any] = {}
 
     if storage_type == "r2":
-        should_multipart = use_multipart and file_size > MULTIPART_THRESHOLD_BYTES
+        should_multipart = (use_multipart and file_size > MULTIPART_THRESHOLD_BYTES) or file_size > SINGLE_PUT_MAX_BYTES
         if should_multipart:
             # Target 32 MB chunks while guaranteeing <= 5000 parts for up to 5 GB files
             part_size = max(32 * 1024 * 1024, math.ceil(file_size / 5000))
@@ -246,6 +279,7 @@ def create_upload_session(
                 ContentType=final_content_type,
             )
             upload_id = mpu["UploadId"]
+            multipart_upload_id = upload_id
             part_urls: List[Dict[str, Any]] = []
             for part_num in range(1, part_count + 1):
                 part_url = r2_client.generate_presigned_url(
@@ -279,37 +313,51 @@ def create_upload_session(
 
     confirmed_flag = 1 if auto_confirm else 0
 
-    with get_db() as conn:
-        cursor = conn.cursor()
-        cursor.execute(
-            """
-            INSERT INTO hosted_files (
-                id, original_name, file_size, content_type, storage_type,
-                storage_key, created_at, expires_at, delete_token,
-                downloads_count, max_downloads, password_hash, is_deleted,
-                purge_after, upload_confirmed
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, 0, 0, ?)
-            """,
-            (
-                file_id,
-                safe_name,
-                file_size,
-                final_content_type,
-                storage_type,
-                storage_key,
-                created_at,
-                expires_at,
-                delete_token,
-                max_downloads,
-                password_hash,
-                confirmed_flag,
-            ),
-        )
+    try:
+        with get_db() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                INSERT INTO hosted_files (
+                    id, original_name, file_size, content_type, storage_type,
+                    storage_key, created_at, expires_at, delete_token,
+                    downloads_count, max_downloads, password_hash, is_deleted,
+                    purge_after, upload_confirmed, multipart_upload_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, 0, 0, ?, ?)
+                """,
+                (
+                    file_id,
+                    safe_name,
+                    file_size,
+                    final_content_type,
+                    storage_type,
+                    storage_key,
+                    created_at,
+                    expires_at,
+                    delete_token,
+                    max_downloads,
+                    password_hash,
+                    confirmed_flag,
+                    multipart_upload_id,
+                ),
+            )
+    except Exception:
+        if storage_type == "r2" and multipart_upload_id and r2_client:
+            try:
+                r2_client.abort_multipart_upload(
+                    Bucket=R2_BUCKET_NAME,
+                    Key=storage_key,
+                    UploadId=multipart_upload_id,
+                )
+            except Exception:
+                pass
+        raise
 
     return {
         "file_id": file_id,
         "filename": safe_name,
         "file_size": file_size,
+        "content_type": final_content_type,
         "upload_url": upload_url,
         "upload_mode": upload_mode,
         "storage_type": storage_type,
@@ -332,10 +380,15 @@ def complete_multipart_session(file_id: str, upload_id: str, parts: List[Dict[st
             raise ValueError("Upload session not found or expired.")
         if row["storage_type"] != "r2":
             raise ValueError("Multipart upload is only valid for R2 storage sessions.")
-        if row["upload_confirmed"] == 1:
-            raise ValueError("Upload session is already confirmed.")
+        if row["upload_confirmed"] != 0:
+            raise ValueError("Upload session is already confirmed or in progress.")
         if row["expires_at"] <= int(time.time()):
+            conn.execute("UPDATE hosted_files SET is_deleted = 1, purge_after = ? WHERE id = ?", (int(time.time()), file_id))
+            conn.commit()
             raise ValueError("Upload session has expired.")
+        expected_upload_id = row["multipart_upload_id"] or ""
+        if not expected_upload_id or not hmac.compare_digest(expected_upload_id, upload_id.strip()):
+            raise ValueError("Invalid multipart upload ID for this session.")
         storage_key = row["storage_key"]
 
     r2_client = get_r2_client()
@@ -359,27 +412,37 @@ def complete_multipart_session(file_id: str, upload_id: str, parts: List[Dict[st
 
 
 def abort_multipart_session(file_id: str, upload_id: str) -> None:
-    """Aborts an in-flight or failed R2 multipart upload and removes session availability."""
+    """Aborts an unconfirmed R2 multipart upload only when upload_id matches the pending session."""
+    storage_key: Optional[str] = None
     with get_db() as conn:
         conn.row_factory = sqlite3.Row
         row = conn.execute(
-            "SELECT storage_type, storage_key FROM hosted_files WHERE id = ?",
+            "SELECT storage_type, storage_key, upload_confirmed, is_deleted, multipart_upload_id FROM hosted_files WHERE id = ?",
             (file_id,),
         ).fetchone()
-        if not row:
+        if not row or row["is_deleted"] != 0:
             return
-        if row["storage_type"] == "r2":
-            r2_client = get_r2_client()
-            if r2_client:
-                try:
-                    r2_client.abort_multipart_upload(
-                        Bucket=R2_BUCKET_NAME,
-                        Key=row["storage_key"],
-                        UploadId=upload_id,
-                    )
-                except Exception:
-                    pass
+        if row["upload_confirmed"] != 0:
+            raise PermissionError("Cannot abort an already confirmed upload session.")
+        if row["storage_type"] != "r2":
+            raise ValueError("Multipart abort is only valid for R2 sessions.")
+        expected_upload_id = row["multipart_upload_id"] or ""
+        if not expected_upload_id or not hmac.compare_digest(expected_upload_id, upload_id.strip()):
+            raise PermissionError("Invalid multipart upload ID.")
+        storage_key = row["storage_key"]
         conn.execute("UPDATE hosted_files SET is_deleted = 2 WHERE id = ?", (file_id,))
+
+    if storage_key:
+        r2_client = get_r2_client()
+        if r2_client:
+            try:
+                r2_client.abort_multipart_upload(
+                    Bucket=R2_BUCKET_NAME,
+                    Key=storage_key,
+                    UploadId=upload_id,
+                )
+            except Exception:
+                pass
 
 
 def confirm_upload_session(file_id: str) -> Dict[str, Any]:
@@ -396,38 +459,51 @@ def confirm_upload_session(file_id: str) -> Dict[str, Any]:
             raise ValueError("File session expired or invalid.")
         if row["expires_at"] <= now:
             cursor.execute("UPDATE hosted_files SET is_deleted = 1, purge_after = ? WHERE id = ?", (now, file_id))
+            conn.commit()
             raise ValueError("File session expired.")
-
+        if row["upload_confirmed"] == -1:
+            raise ValueError("Upload is still in progress.")
         storage_type = row["storage_type"]
         storage_key = row["storage_key"]
-        actual_size = row["file_size"]
+        original_name = row["original_name"]
 
-        if storage_type == "r2":
-            r2_client = get_r2_client()
-            if not r2_client:
-                raise RuntimeError("Cloudflare R2 is currently unreachable.")
+    actual_size: int
+    if storage_type == "r2":
+        r2_client = get_r2_client()
+        if not r2_client:
+            raise RuntimeError("Cloudflare R2 is currently unreachable.")
+        try:
+            head = r2_client.head_object(Bucket=R2_BUCKET_NAME, Key=storage_key)
+            actual_size = int(head.get("ContentLength", 0))
+        except ClientError:
+            raise ValueError("Uploaded file was not found in R2 storage.")
+        if actual_size <= 0 or actual_size > MAX_HOSTING_FILE_SIZE:
             try:
-                head = r2_client.head_object(Bucket=R2_BUCKET_NAME, Key=storage_key)
-                actual_size = int(head.get("ContentLength", 0))
-            except ClientError:
-                raise ValueError("Uploaded file was not found in R2 storage.")
-            if actual_size <= 0 or actual_size > MAX_HOSTING_FILE_SIZE:
-                try:
-                    r2_client.delete_object(Bucket=R2_BUCKET_NAME, Key=storage_key)
-                except Exception:
-                    pass
-                cursor.execute("UPDATE hosted_files SET is_deleted = 2 WHERE id = ?", (file_id,))
-                raise ValueError("Uploaded file size is invalid or exceeds 5GB limit.")
-        else:
-            local_path = HOSTING_DIR / file_id / row["original_name"]
-            if not local_path.is_file():
-                raise ValueError("Uploaded file was not found on server storage.")
-            actual_size = local_path.stat().st_size
+                r2_client.delete_object(Bucket=R2_BUCKET_NAME, Key=storage_key)
+            except Exception:
+                pass
+            with get_db() as conn:
+                conn.execute("UPDATE hosted_files SET is_deleted = 2 WHERE id = ?", (file_id,))
+            raise ValueError("Uploaded file size is invalid or exceeds 5GB limit.")
+    else:
+        local_path = HOSTING_DIR / file_id / original_name
+        if not local_path.is_file():
+            raise ValueError("Uploaded file was not found on server storage.")
+        actual_size = local_path.stat().st_size
+        if actual_size <= 0 or actual_size > MAX_HOSTING_FILE_SIZE:
+            shutil.rmtree(HOSTING_DIR / file_id, ignore_errors=True)
+            with get_db() as conn:
+                conn.execute("UPDATE hosted_files SET is_deleted = 2 WHERE id = ?", (file_id,))
+            raise ValueError("Uploaded file size is invalid or exceeds 5GB limit.")
 
+    with get_db() as conn:
+        cursor = conn.cursor()
         cursor.execute(
-            "UPDATE hosted_files SET upload_confirmed = 1, file_size = ? WHERE id = ?",
-            (actual_size, file_id),
+            "UPDATE hosted_files SET upload_confirmed = 1, file_size = ? WHERE id = ? AND is_deleted = 0 AND upload_confirmed >= 0 AND expires_at > ?",
+            (actual_size, file_id, int(time.time())),
         )
+        if cursor.rowcount == 0:
+            raise ValueError("File session expired or invalid.")
 
     meta = get_file_metadata(file_id)
     if not meta:
@@ -471,6 +547,39 @@ def get_file_metadata(file_id: str) -> Optional[Dict[str, Any]]:
 
 def prepare_download(file_id: str, password: Optional[str] = None, issue_stream_token: bool = False) -> Dict[str, Any]:
     """Validates download permissions, atomically updates download counts, and returns URL or local path."""
+    # Step 1: Read-only validation & scrypt verification outside SQLite write lock
+    with get_db() as conn:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            "SELECT * FROM hosted_files WHERE id = ? AND is_deleted = 0 AND upload_confirmed = 1",
+            (file_id,),
+        ).fetchone()
+        if not row:
+            raise ValueError("File not found or has already expired.")
+
+        now = int(time.time())
+        if row["expires_at"] <= now:
+            conn.execute(
+                "UPDATE hosted_files SET is_deleted = 1, purge_after = ? WHERE id = ?",
+                (now, file_id),
+            )
+            conn.commit()
+            raise ValueError("This file has expired and is no longer available.")
+
+        password_hash = row["password_hash"]
+        storage_type_hint = row["storage_type"]
+
+    if password_hash:
+        if not password or not verify_password(password.strip(), password_hash):
+            raise PermissionError("Incorrect password for this file.")
+
+    r2_client = None
+    if storage_type_hint == "r2":
+        r2_client = get_r2_client()
+        if not r2_client:
+            raise RuntimeError("Cloudflare R2 is currently unreachable.")
+
+    # Step 2: Atomic conditional update inside BEGIN IMMEDIATE
     with get_db() as conn:
         conn.row_factory = sqlite3.Row
         conn.execute("BEGIN IMMEDIATE")
@@ -491,10 +600,6 @@ def prepare_download(file_id: str, password: Optional[str] = None, issue_stream_
             conn.commit()
             raise ValueError("This file has expired and is no longer available.")
 
-        if row["password_hash"]:
-            if not password or not verify_password(password.strip(), row["password_hash"]):
-                raise PermissionError("Incorrect password for this file.")
-
         storage_type = row["storage_type"]
         storage_key = row["storage_key"]
         filename = row["original_name"]
@@ -509,21 +614,10 @@ def prepare_download(file_id: str, password: Optional[str] = None, issue_stream_
         is_burn = row["max_downloads"] > 0 and new_downloads >= row["max_downloads"]
 
         if storage_type == "r2":
-            r2_client = get_r2_client()
+            if not r2_client:
+                r2_client = get_r2_client()
             if not r2_client:
                 raise RuntimeError("Cloudflare R2 is currently unreachable.")
-
-            content_disposition = _build_content_disposition(filename)
-            download_url = r2_client.generate_presigned_url(
-                "get_object",
-                Params={
-                    "Bucket": R2_BUCKET_NAME,
-                    "Key": storage_key,
-                    "ResponseContentDisposition": content_disposition,
-                    "ResponseContentType": content_type,
-                },
-                ExpiresIn=BURN_PURGE_GRACE_SECONDS,
-            )
 
             cursor.execute(
                 "UPDATE hosted_files SET downloads_count = ?, is_deleted = ?, purge_after = ? WHERE id = ?",
@@ -534,42 +628,52 @@ def prepare_download(file_id: str, password: Optional[str] = None, issue_stream_
                     file_id,
                 ),
             )
-
-            return {
-                "type": "redirect",
-                "url": download_url,
-                "filename": filename,
-                "burn": is_burn,
-                "storage_key": storage_key,
-            }
-
-        # Local storage path
-        cursor.execute(
-            "UPDATE hosted_files SET downloads_count = ?, is_deleted = ?, purge_after = ? WHERE id = ?",
-            (new_downloads, 1 if is_burn else 0, now + 300 if is_burn else 0, file_id),
-        )
-
-        if issue_stream_token:
-            stream_token = secrets.token_urlsafe(24)
+        else:
             cursor.execute(
-                "INSERT INTO download_tokens (token, file_id, expires_at) VALUES (?, ?, ?)",
-                (stream_token, file_id, now + 180),
+                "UPDATE hosted_files SET downloads_count = ?, is_deleted = ?, purge_after = ? WHERE id = ?",
+                (new_downloads, 1 if is_burn else 0, now + 300 if is_burn else 0, file_id),
             )
+
+            if issue_stream_token:
+                stream_token = secrets.token_urlsafe(24)
+                cursor.execute(
+                    "INSERT INTO download_tokens (token, file_id, expires_at) VALUES (?, ?, ?)",
+                    (stream_token, file_id, now + 180),
+                )
+                return {
+                    "type": "redirect",
+                    "url": f"/api/hosting/stream/{file_id}?token={stream_token}",
+                    "filename": filename,
+                    "burn": is_burn,
+                }
+
             return {
-                "type": "redirect",
-                "url": f"/api/hosting/stream/{file_id}?token={stream_token}",
+                "type": "file",
+                "path": HOSTING_DIR / file_id / filename,
                 "filename": filename,
+                "content_type": content_type,
                 "burn": is_burn,
+                "file_dir": HOSTING_DIR / file_id,
             }
 
-        return {
-            "type": "file",
-            "path": HOSTING_DIR / file_id / filename,
-            "filename": filename,
-            "content_type": content_type,
-            "burn": is_burn,
-            "file_dir": HOSTING_DIR / file_id,
-        }
+    content_disposition = _build_content_disposition(filename)
+    download_url = r2_client.generate_presigned_url(
+        "get_object",
+        Params={
+            "Bucket": R2_BUCKET_NAME,
+            "Key": storage_key,
+            "ResponseContentDisposition": content_disposition,
+            "ResponseContentType": content_type,
+        },
+        ExpiresIn=BURN_PURGE_GRACE_SECONDS,
+    )
+    return {
+        "type": "redirect",
+        "url": download_url,
+        "filename": filename,
+        "burn": is_burn,
+        "storage_key": storage_key,
+    }
 
 
 def consume_local_stream_token(file_id: str, token: str) -> Dict[str, Any]:
@@ -585,6 +689,7 @@ def consume_local_stream_token(file_id: str, token: str) -> Dict[str, Any]:
         ).fetchone()
         if not tok_row or tok_row["expires_at"] < now:
             cursor.execute("DELETE FROM download_tokens WHERE token = ?", (token,))
+            conn.commit()
             raise ValueError("Download token is invalid or expired.")
 
         cursor.execute("DELETE FROM download_tokens WHERE token = ?", (token,))
@@ -593,10 +698,12 @@ def consume_local_stream_token(file_id: str, token: str) -> Dict[str, Any]:
             (file_id,),
         ).fetchone()
         if not file_row:
+            conn.commit()
             raise ValueError("File is no longer available.")
 
         local_path = HOSTING_DIR / file_id / file_row["original_name"]
         if not local_path.is_file():
+            conn.commit()
             raise ValueError("File missing on server storage.")
 
         return {
@@ -610,6 +717,7 @@ def consume_local_stream_token(file_id: str, token: str) -> Dict[str, Any]:
 
 def delete_hosted_file(file_id: str, delete_token: str) -> bool:
     """Allows the anonymous uploader to delete their file immediately using their secret token."""
+    now = int(time.time())
     with get_db() as conn:
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
@@ -623,29 +731,57 @@ def delete_hosted_file(file_id: str, delete_token: str) -> bool:
         if not secrets.compare_digest(row["delete_token"], delete_token.strip()):
             raise PermissionError("Invalid delete token.")
 
-        cursor.execute("UPDATE hosted_files SET is_deleted = 2 WHERE id = ?", (file_id,))
-
         storage_type = row["storage_type"]
         storage_key = row["storage_key"]
+        multipart_upload_id = row["multipart_upload_id"] or ""
+        upload_confirmed = row["upload_confirmed"]
 
-        if storage_type == "r2":
-            r2_client = get_r2_client()
-            if r2_client:
-                try:
-                    r2_client.delete_object(Bucket=R2_BUCKET_NAME, Key=storage_key)
-                except Exception as e:
-                    print(f"Error deleting R2 object {storage_key}: {e}")
-        else:
-            file_dir = HOSTING_DIR / file_id
-            if file_dir.exists():
-                shutil.rmtree(file_dir, ignore_errors=True)
+        # Mark pending purge immediately so concurrent requests cannot view/download while storage deletes
+        cursor.execute(
+            "UPDATE hosted_files SET is_deleted = 1, purge_after = ? WHERE id = ?",
+            (now, file_id),
+        )
 
-        return True
+    purged = False
+    if storage_type == "r2":
+        r2_client = get_r2_client()
+        if r2_client:
+            try:
+                if upload_confirmed == 0 and multipart_upload_id:
+                    try:
+                        r2_client.abort_multipart_upload(
+                            Bucket=R2_BUCKET_NAME,
+                            Key=storage_key,
+                            UploadId=multipart_upload_id,
+                        )
+                    except ClientError:
+                        pass
+                r2_client.delete_object(Bucket=R2_BUCKET_NAME, Key=storage_key)
+                purged = True
+            except Exception as e:
+                print(f"Error deleting R2 object {storage_key}: {e}")
+    else:
+        file_dir = HOSTING_DIR / file_id
+        if file_dir.exists():
+            shutil.rmtree(file_dir, ignore_errors=True)
+        purged = not file_dir.exists()
+
+    if purged:
+        with get_db() as conn:
+            conn.execute("UPDATE hosted_files SET is_deleted = 2 WHERE id = ?", (file_id,))
+
+    return True
+
+
+def _is_r2_not_found(err: ClientError) -> bool:
+    code = str(err.response.get("Error", {}).get("Code", ""))
+    return code in ("404", "NoSuchKey", "NoSuchUpload")
 
 
 def cleanup_expired_files_job(force: bool = False):
     """Background worker to purge expired, stale unconfirmed, or post-grace burned files."""
     now = int(time.time())
+    expired_rows: List[Dict[str, Any]] = []
     with get_db() as conn:
         conn.row_factory = sqlite3.Row
         conn.execute("BEGIN IMMEDIATE")
@@ -672,35 +808,63 @@ def cleanup_expired_files_job(force: bool = False):
         # 2) Burned file passed its post-download grace window (purge_after > 0 and purge_after <= now), OR
         # 3) Legacy burned row without purge_after older than 30 min, OR
         # 4) Abandoned unconfirmed upload older than 2 hours.
-        expired_files = cursor.execute(
+        rows = cursor.execute(
             """
-            SELECT * FROM hosted_files
+            SELECT id, storage_type, storage_key, upload_confirmed, multipart_upload_id
+            FROM hosted_files
             WHERE (expires_at <= ? AND is_deleted < 2)
                OR (is_deleted = 1 AND purge_after > 0 AND purge_after <= ?)
                OR (is_deleted = 1 AND purge_after = 0 AND created_at <= ?)
-               OR (upload_confirmed = 0 AND created_at <= ? AND is_deleted < 2)
+               OR (upload_confirmed <= 0 AND created_at <= ? AND is_deleted < 2)
             """,
             (now, now, now - BURN_PURGE_GRACE_SECONDS, now - 7200),
         ).fetchall()
+        expired_rows = [dict(r) for r in rows]
 
-        if not expired_files:
-            return
+    if not expired_rows:
+        return
 
-        r2_client = get_r2_client()
+    r2_client = get_r2_client() if any(r["storage_type"] == "r2" for r in expired_rows) else None
+    purged_ids: List[str] = []
 
-        for row in expired_files:
-            file_id = row["id"]
-            storage_type = row["storage_type"]
-            storage_key = row["storage_key"]
+    for row in expired_rows:
+        file_id = row["id"]
+        storage_type = row["storage_type"]
+        storage_key = row["storage_key"]
+        multipart_upload_id = row.get("multipart_upload_id") or ""
 
-            if storage_type == "r2" and r2_client:
+        if storage_type == "r2":
+            if not r2_client:
+                continue
+            try:
+                if row["upload_confirmed"] == 0 and multipart_upload_id:
+                    try:
+                        r2_client.abort_multipart_upload(
+                            Bucket=R2_BUCKET_NAME,
+                            Key=storage_key,
+                            UploadId=multipart_upload_id,
+                        )
+                    except ClientError as ce:
+                        if not _is_r2_not_found(ce):
+                            raise
                 try:
                     r2_client.delete_object(Bucket=R2_BUCKET_NAME, Key=storage_key)
-                except Exception as e:
-                    print(f"Error purging expired R2 file {file_id}: {e}")
-            elif storage_type == "local":
-                file_dir = HOSTING_DIR / file_id
-                if file_dir.exists():
-                    shutil.rmtree(file_dir, ignore_errors=True)
+                except ClientError as ce:
+                    if not _is_r2_not_found(ce):
+                        raise
+                purged_ids.append(file_id)
+            except Exception as e:
+                print(f"Error purging expired R2 file {file_id}: {e}")
+        elif storage_type == "local":
+            file_dir = HOSTING_DIR / file_id
+            if file_dir.exists():
+                shutil.rmtree(file_dir, ignore_errors=True)
+            if not file_dir.exists():
+                purged_ids.append(file_id)
 
-            cursor.execute("UPDATE hosted_files SET is_deleted = 2 WHERE id = ?", (file_id,))
+    if purged_ids:
+        with get_db() as conn:
+            conn.executemany(
+                "UPDATE hosted_files SET is_deleted = 2 WHERE id = ?",
+                [(fid,) for fid in purged_ids],
+            )

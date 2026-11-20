@@ -5,7 +5,7 @@
   "scripts": {
     "predev": "node scripts/generate-seo-files.mjs",
     "dev": "next dev --webpack",
-    "prebuild": "node scripts/generate-seo-files.mjs",
+    "prebuild": "node scripts/generate-seo-files.mjs --prod",
     "build": "next build --webpack",
     "start": "next start -p 3480",
     "lint": "eslint"

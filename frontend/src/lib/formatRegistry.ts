@@ -168,6 +168,43 @@ export const ALL_FORMATS: FormatOption[] = [
   }
 ];
 
+export const FORMAT_ALIASES: Record<string, string> = {
+  jpeg: 'jpg',
+  heif: 'heic',
+  tif: 'tiff',
+};
+
+export function normalizeFormatExt(ext: string): string {
+  const clean = ext.toLowerCase().replace('.', '').trim();
+  return FORMAT_ALIASES[clean] || clean;
+}
+
+const ACCEPT_BY_FORMAT: Record<string, string> = {
+  png: '.png,image/png',
+  jpg: '.jpg,.jpeg,image/jpeg',
+  webp: '.webp,image/webp',
+  avif: '.avif,image/avif',
+  svg: '.svg,image/svg+xml',
+  ico: '.ico,image/x-icon',
+  bmp: '.bmp,image/bmp',
+  tiff: '.tiff,.tif,image/tiff',
+  gif: '.gif,image/gif',
+  heic: '.heic,.heif,image/heic,image/heif',
+  psd: '.psd,image/vnd.adobe.photoshop',
+  tga: '.tga,image/x-tga',
+  pdf: '.pdf,application/pdf',
+  docx: '.docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  pptx: '.pptx,application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  xlsx: '.xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  csv: '.csv,text/csv',
+  txt: '.txt,text/plain',
+};
+
+export function getAcceptForFormat(ext: string): string {
+  const norm = normalizeFormatExt(ext);
+  return ACCEPT_BY_FORMAT[norm] || `.${norm}`;
+}
+
 export const DEFAULT_TARGET_FORMATS: Record<string, string> = {
   // Image mappings
   png: 'webp',
@@ -179,6 +216,7 @@ export const DEFAULT_TARGET_FORMATS: Record<string, string> = {
   ico: 'png',
   bmp: 'png',
   tiff: 'jpg',
+  tif: 'jpg',
   gif: 'webp',
   heic: 'jpg',
   heif: 'jpg',
@@ -190,27 +228,26 @@ export const DEFAULT_TARGET_FORMATS: Record<string, string> = {
   docx: 'pdf',
   pptx: 'pdf',
   xlsx: 'pdf',
-  xls: 'pdf',
   csv: 'xlsx',
   txt: 'pdf',
 };
 
 export function getCompatibleTargets(sourceExt: string): FormatOption[] {
-  const ext = sourceExt.toLowerCase().replace('.', '');
-  
-  if (['png', 'jpg', 'jpeg', 'webp', 'avif', 'bmp', 'tiff', 'gif', 'heic', 'heif', 'psd', 'tga', 'svg', 'ico'].includes(ext)) {
+  const ext = normalizeFormatExt(sourceExt);
+
+  if (['png', 'jpg', 'webp', 'avif', 'bmp', 'tiff', 'gif', 'heic', 'psd', 'tga', 'svg', 'ico'].includes(ext)) {
     // Images convert to any other supported output image, vector, icon, or PDF (PSD is input-only)
     return ALL_FORMATS.filter(
       f => f.ext !== ext && f.ext !== 'psd' && (['image', 'vector', 'icon'].includes(f.category) || f.ext === 'pdf')
     );
   }
-  
+
   if (ext === 'pdf') {
     // PDF can convert to DOCX, PPTX, XLSX, CSV, TXT, or output Image formats (PSD is input-only)
     return ALL_FORMATS.filter(f => f.ext !== 'pdf' && f.ext !== 'psd');
   }
 
-  if (['xlsx', 'xls'].includes(ext)) {
+  if (ext === 'xlsx') {
     // Excel converts to PDF or CSV
     return ALL_FORMATS.filter(f => f.ext === 'pdf' || f.ext === 'csv');
   }
@@ -220,7 +257,7 @@ export function getCompatibleTargets(sourceExt: string): FormatOption[] {
     return ALL_FORMATS.filter(f => f.ext === 'xlsx' || f.ext === 'pdf');
   }
 
-  if (['docx', 'doc', 'pptx', 'ppt'].includes(ext)) {
+  if (['docx', 'pptx'].includes(ext)) {
     // Word and PowerPoint documents convert to PDF or TXT
     return ALL_FORMATS.filter(f => f.ext === 'pdf' || f.ext === 'txt');
   }
@@ -228,6 +265,10 @@ export function getCompatibleTargets(sourceExt: string): FormatOption[] {
   if (ext === 'txt') {
     // Plain text converts to PDF
     return ALL_FORMATS.filter(f => f.ext === 'pdf');
+  }
+
+  if (['doc', 'ppt', 'xls'].includes(ext)) {
+    return [];
   }
 
   // Fallback

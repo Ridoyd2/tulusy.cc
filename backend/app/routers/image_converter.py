@@ -1,20 +1,22 @@
 import asyncio
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, BackgroundTasks
 from fastapi.responses import FileResponse
-from pathlib import Path
 from typing import Optional, List
 
-from app.services.utils import create_task_dir, save_upload_file, cleanup_task_dir, create_zip_archive
+from app.config import WRITABLE_IMAGE_FORMATS
+from app.services.utils import (
+    IMAGE_MEDIA_TYPES,
+    cleanup_task_dir,
+    create_task_dir,
+    create_zip_archive,
+    get_safe_stem,
+    save_upload_file,
+    validate_target_format,
+)
 from app.services.image_service import convert_single_image
 
 router = APIRouter(prefix="/api/convert/image", tags=["Image Converter"])
 
-def get_safe_stem(filename: Optional[str], default_name: str = "converted_image") -> str:
-    if filename and filename.strip():
-        stem = Path(filename).stem
-        if stem:
-            return stem
-    return default_name
 
 @router.post("")
 async def convert_image_endpoint(
@@ -33,53 +35,47 @@ async def convert_image_endpoint(
     Universal single image converter endpoint.
     """
     task_id, upload_dir, output_dir = create_task_dir()
-    
+
     try:
+        target_fmt = validate_target_format(target_format, WRITABLE_IMAGE_FORMATS)
         input_path = await save_upload_file(file, upload_dir)
-        target_fmt = target_format.lower().lstrip('.')
-        output_filename = f"{get_safe_stem(file.filename)}.{target_fmt}"
+        stem = get_safe_stem(file.filename, "converted_image")
+        output_filename = f"{stem}.{target_fmt}"
         output_path = output_dir / output_filename
-        
+
         await asyncio.to_thread(
             convert_single_image,
             input_path=input_path,
             output_path=output_path,
             target_format=target_fmt,
-            quality=quality or 90,
+            quality=quality if quality is not None else 90,
             width=width,
             height=height,
             maintain_aspect_ratio=maintain_aspect_ratio if maintain_aspect_ratio is not None else True,
-            dpi=dpi or 300,
+            dpi=dpi if dpi is not None else 300,
             grayscale=grayscale or False,
             bg_color=bg_color or "#FFFFFF"
         )
-        
+
         # Schedule cleanup after sending response
         background_tasks.add_task(cleanup_task_dir, task_id)
-        
-        media_type = "application/octet-stream"
-        if target_fmt in ["jpg", "jpeg"]:
-            media_type = "image/jpeg"
-        elif target_fmt == "png":
-            media_type = "image/png"
-        elif target_fmt == "webp":
-            media_type = "image/webp"
-        elif target_fmt == "svg":
-            media_type = "image/svg+xml"
-        elif target_fmt == "pdf":
-            media_type = "application/pdf"
-            
+        media_type = IMAGE_MEDIA_TYPES.get(target_fmt, "application/octet-stream")
+
         return FileResponse(
             path=str(output_path),
             filename=output_filename,
             media_type=media_type
         )
+    except HTTPException:
+        await cleanup_task_dir(task_id)
+        raise
     except ValueError as ve:
         await cleanup_task_dir(task_id)
         raise HTTPException(status_code=400, detail=str(ve))
     except Exception as e:
         await cleanup_task_dir(task_id)
         raise HTTPException(status_code=500, detail=f"Image conversion failed: {str(e)}")
+
 
 @router.post("/batch")
 async def convert_image_batch_endpoint(
@@ -95,20 +91,27 @@ async def convert_image_batch_endpoint(
     """
     task_id, upload_dir, output_dir = create_task_dir()
     converted_files = []
-    
+
     try:
-        target_fmt = target_format.lower().lstrip('.')
+        if not files:
+            raise ValueError("No files uploaded for batch conversion.")
+        target_fmt = validate_target_format(target_format, WRITABLE_IMAGE_FORMATS)
+
         for file in files:
             input_path = await save_upload_file(file, upload_dir)
-            output_filename = f"{input_path.stem}.{target_fmt}"
-            output_path = output_dir / output_filename
-            
+            base_stem = get_safe_stem(input_path.name, "converted_image")
+            output_path = output_dir / f"{base_stem}.{target_fmt}"
+            counter = 1
+            while output_path.exists():
+                output_path = output_dir / f"{base_stem}_{counter}.{target_fmt}"
+                counter += 1
+
             await asyncio.to_thread(
                 convert_single_image,
                 input_path=input_path,
                 output_path=output_path,
                 target_format=target_fmt,
-                quality=quality or 90,
+                quality=quality if quality is not None else 90,
                 width=width,
                 height=height
             )
@@ -116,14 +119,17 @@ async def convert_image_batch_endpoint(
 
         zip_path = output_dir / f"converted_images_{target_fmt}.zip"
         await asyncio.to_thread(create_zip_archive, converted_files, zip_path)
-        
+
         background_tasks.add_task(cleanup_task_dir, task_id)
-        
+
         return FileResponse(
             path=str(zip_path),
             filename=f"converted_images_{target_fmt}.zip",
             media_type="application/zip"
         )
+    except HTTPException:
+        await cleanup_task_dir(task_id)
+        raise
     except ValueError as ve:
         await cleanup_task_dir(task_id)
         raise HTTPException(status_code=400, detail=str(ve))

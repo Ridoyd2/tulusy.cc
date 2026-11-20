@@ -5,7 +5,7 @@ import { Navbar } from './Navbar';
 import { Footer } from './Footer';
 import { ToolFaqAccordion } from './ToolFaqAccordion';
 import { getAllSEOSlugs } from '@/lib/seoData';
-import { SITE_URL } from '@/lib/site';
+import { safeJsonLd, SITE_URL } from '@/lib/site';
 import { DEDICATED_TOOL_IDS, IndexableToolId, TOOL_ROUTES } from '@/lib/toolsConfig';
 
 const TOTAL_CONVERTERS = getAllSEOSlugs().length;
@@ -28,6 +28,9 @@ export const ToolPageShell: React.FC<ToolPageShellProps> = ({ toolId, children }
     applicationCategory: tool.appCategory,
     operatingSystem: 'All',
     browserRequirements: 'Requires JavaScript. Requires HTML5.',
+    publisher: {
+      '@id': `${SITE_URL}/#organization`,
+    },
     offers: {
       '@type': 'Offer',
       price: '0',
@@ -72,15 +75,15 @@ export const ToolPageShell: React.FC<ToolPageShellProps> = ({ toolId, children }
     <>
       <script
         type="application/ld+json"
-        dangerouslySetInnerHTML={{ __html: JSON.stringify(webAppSchema) }}
+        dangerouslySetInnerHTML={{ __html: safeJsonLd(webAppSchema) }}
       />
       <script
         type="application/ld+json"
-        dangerouslySetInnerHTML={{ __html: JSON.stringify(faqSchema) }}
+        dangerouslySetInnerHTML={{ __html: safeJsonLd(faqSchema) }}
       />
       <script
         type="application/ld+json"
-        dangerouslySetInnerHTML={{ __html: JSON.stringify(breadcrumbSchema) }}
+        dangerouslySetInnerHTML={{ __html: safeJsonLd(breadcrumbSchema) }}
       />
 
       <div className="min-h-screen flex flex-col">
@@ -93,9 +96,9 @@ export const ToolPageShell: React.FC<ToolPageShellProps> = ({ toolId, children }
 
           <section className="space-y-3.5 pt-6 border-t border-slate-200 dark:border-slate-800">
             <div className="flex items-center justify-between gap-3">
-              <h3 className="text-sm sm:text-base font-semibold text-slate-900 dark:text-white">
+              <h2 className="text-sm sm:text-base font-semibold text-slate-900 dark:text-white">
                 More Free Utilities
-              </h3>
+              </h2>
               <Link
                 href="/convert"
                 className="text-xs font-medium text-blue-600 dark:text-blue-400 hover:underline inline-flex items-center gap-1"

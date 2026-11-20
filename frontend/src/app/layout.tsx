@@ -1,7 +1,12 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
-import { CONTACT_EMAIL, SITE_URL } from "@/lib/site";
+import {
+  CONTACT_EMAIL,
+  safeJsonLd,
+  SITE_ROOT_URL,
+  SITE_URL,
+} from "@/lib/site";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -12,6 +17,13 @@ const geistMono = Geist_Mono({
   variable: "--font-geist-mono",
   subsets: ["latin"],
 });
+
+export const viewport: Viewport = {
+  themeColor: [
+    { media: "(prefers-color-scheme: light)", color: "#f8fafc" },
+    { media: "(prefers-color-scheme: dark)", color: "#090d16" },
+  ],
+};
 
 export const metadata: Metadata = {
   metadataBase: new URL(SITE_URL),
@@ -41,9 +53,10 @@ export const metadata: Metadata = {
     icon: [
       { url: "/icon.svg", type: "image/svg+xml" },
       { url: "/favicon.ico", sizes: "any" },
+      { url: "/icon-192.png", sizes: "192x192", type: "image/png" },
     ],
     shortcut: "/favicon.ico",
-    apple: "/icon.svg",
+    apple: [{ url: "/apple-touch-icon.png", sizes: "180x180", type: "image/png" }],
   },
   formatDetection: {
     email: false,
@@ -53,7 +66,7 @@ export const metadata: Metadata = {
   openGraph: {
     type: "website",
     locale: "en_US",
-    url: SITE_URL,
+    url: SITE_ROOT_URL,
     siteName: "Tulusy",
     title: "Tulusy - Free Universal File Converter & 5GB Anonymous Drop",
     description:
@@ -89,16 +102,24 @@ export default function RootLayout({
         "@type": "WebSite",
         "@id": `${SITE_URL}/#website`,
         name: "Tulusy",
-        url: SITE_URL,
+        url: SITE_ROOT_URL,
         description:
           "Free online file converter for images, PDFs, documents, and spreadsheets, plus 5GB anonymous file sharing.",
+        publisher: {
+          "@id": `${SITE_URL}/#organization`,
+        },
       },
       {
         "@type": "Organization",
         "@id": `${SITE_URL}/#organization`,
         name: "Tulusy",
-        url: SITE_URL,
-        logo: `${SITE_URL}/icon.svg`,
+        url: SITE_ROOT_URL,
+        logo: {
+          "@type": "ImageObject",
+          url: `${SITE_URL}/icon-512.png`,
+          width: 512,
+          height: 512,
+        },
         email: CONTACT_EMAIL,
       },
     ],
@@ -113,7 +134,7 @@ export default function RootLayout({
       <head>
         <script
           type="application/ld+json"
-          dangerouslySetInnerHTML={{ __html: JSON.stringify(globalSchema) }}
+          dangerouslySetInnerHTML={{ __html: safeJsonLd(globalSchema) }}
         />
         <script
           dangerouslySetInnerHTML={{

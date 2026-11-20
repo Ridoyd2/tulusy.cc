@@ -3,7 +3,7 @@ import shutil
 import sqlite3
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import List, Optional
 
 from fastapi import APIRouter, BackgroundTasks, File, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse, RedirectResponse
@@ -36,9 +36,14 @@ class InitUploadRequest(BaseModel):
     use_multipart: bool = False
 
 
+class MultipartPart(BaseModel):
+    PartNumber: int = Field(..., ge=1, le=10000)
+    ETag: str = Field(..., min_length=1)
+
+
 class CompleteMultipartRequest(BaseModel):
     upload_id: str = Field(..., min_length=1)
-    parts: List[Dict[str, Any]] = Field(..., min_length=1)
+    parts: List[MultipartPart] = Field(..., min_length=1)
 
 
 class AbortMultipartRequest(BaseModel):
@@ -53,13 +58,79 @@ class ReportRequest(BaseModel):
     reason: str = Field(..., min_length=5, max_length=1000)
 
 
+def _mark_file_purged(file_id: str) -> None:
+    with get_db() as conn:
+        conn.execute("UPDATE hosted_files SET is_deleted = 2 WHERE id = ?", (file_id,))
+
+
 async def _cleanup_local_dir(dir_path: Path, file_id: Optional[str] = None):
     await asyncio.sleep(1)
     if dir_path and dir_path.exists():
-        shutil.rmtree(dir_path, ignore_errors=True)
-    if file_id:
-        with get_db() as conn:
-            conn.execute("UPDATE hosted_files SET is_deleted = 2 WHERE id = ?", (file_id,))
+        await asyncio.to_thread(shutil.rmtree, dir_path, True)
+    if file_id and (not dir_path or not dir_path.exists()):
+        await asyncio.to_thread(_mark_file_purged, file_id)
+
+
+def _claim_local_upload_session(file_id: str) -> str:
+    now = int(time.time())
+    with get_db() as conn:
+        conn.row_factory = sqlite3.Row
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            "SELECT * FROM hosted_files WHERE id = ? AND is_deleted = 0",
+            (file_id,),
+        ).fetchone()
+        if not row:
+            raise LookupError("Upload session not found or expired.")
+        if row["storage_type"] != "local":
+            raise ValueError("Direct server upload is disabled when R2 storage is active.")
+        if row["upload_confirmed"] == 1:
+            raise FileExistsError("Upload session has already been completed.")
+        if row["upload_confirmed"] == -1:
+            raise FileExistsError("Upload session is already in progress.")
+        if row["expires_at"] <= now:
+            conn.execute("UPDATE hosted_files SET is_deleted = 1, purge_after = ? WHERE id = ?", (now, file_id))
+            conn.commit()
+            raise TimeoutError("Upload session has expired.")
+        conn.execute(
+            "UPDATE hosted_files SET upload_confirmed = -1 WHERE id = ? AND upload_confirmed = 0",
+            (file_id,),
+        )
+        return str(row["original_name"])
+
+
+def _release_local_upload_claim(file_id: str, total_written: Optional[int] = None, delete: bool = False) -> bool:
+    with get_db() as conn:
+        cursor = conn.cursor()
+        if delete:
+            cursor.execute("UPDATE hosted_files SET is_deleted = 2 WHERE id = ?", (file_id,))
+            return True
+        if total_written is not None:
+            cursor.execute(
+                "UPDATE hosted_files SET file_size = ?, upload_confirmed = 1 WHERE id = ? AND upload_confirmed = -1 AND is_deleted = 0",
+                (total_written, file_id),
+            )
+            return cursor.rowcount > 0
+        cursor.execute(
+            "UPDATE hosted_files SET upload_confirmed = 0 WHERE id = ? AND upload_confirmed = -1",
+            (file_id,),
+        )
+        return True
+
+
+def _record_file_report(file_id: str, reason: str) -> bool:
+    with get_db() as conn:
+        exists = conn.execute(
+            "SELECT 1 FROM hosted_files WHERE id = ? AND is_deleted < 2",
+            (file_id,),
+        ).fetchone()
+        if not exists:
+            return False
+        conn.execute(
+            "INSERT INTO file_reports (file_id, reason, created_at) VALUES (?, ?, ?)",
+            (file_id, reason, int(time.time())),
+        )
+    return True
 
 
 @router.post("/init-upload")
@@ -69,7 +140,8 @@ async def init_upload(req: InitUploadRequest):
     Generates pre-signed PUT or Multipart URLs for Cloudflare R2 (up to 5GB).
     """
     try:
-        session = create_upload_session(
+        session = await asyncio.to_thread(
+            create_upload_session,
             filename=req.filename,
             file_size=req.file_size,
             content_type=req.content_type,
@@ -91,25 +163,18 @@ async def init_upload(req: InitUploadRequest):
 async def upload_direct(file_id: str, file: UploadFile = File(...)):
     """
     Fallback upload endpoint when Cloudflare R2 credentials are not configured.
-    Guards against overwriting active/R2/expired sessions and streams writes off the event loop.
+    Guards against concurrent/active/R2/expired sessions and streams writes off the event loop.
     """
-    now = int(time.time())
-    with get_db() as conn:
-        conn.row_factory = sqlite3.Row
-        row = conn.execute(
-            "SELECT * FROM hosted_files WHERE id = ? AND is_deleted = 0",
-            (file_id,),
-        ).fetchone()
-        if not row:
-            raise HTTPException(status_code=404, detail="Upload session not found or expired.")
-        if row["storage_type"] != "local":
-            raise HTTPException(status_code=400, detail="Direct server upload is disabled when R2 storage is active.")
-        if row["upload_confirmed"] == 1:
-            raise HTTPException(status_code=409, detail="Upload session has already been completed.")
-        if row["expires_at"] <= now:
-            conn.execute("UPDATE hosted_files SET is_deleted = 1, purge_after = ? WHERE id = ?", (now, file_id))
-            raise HTTPException(status_code=410, detail="Upload session has expired.")
-        original_name = row["original_name"]
+    try:
+        original_name = await asyncio.to_thread(_claim_local_upload_session, file_id)
+    except LookupError as le:
+        raise HTTPException(status_code=404, detail=str(le))
+    except ValueError as ve:
+        raise HTTPException(status_code=400, detail=str(ve))
+    except FileExistsError as fee:
+        raise HTTPException(status_code=409, detail=str(fee))
+    except TimeoutError as te:
+        raise HTTPException(status_code=410, detail=str(te))
 
     target_dir = HOSTING_DIR / file_id
     target_dir.mkdir(parents=True, exist_ok=True)
@@ -126,20 +191,18 @@ async def upload_direct(file_id: str, file: UploadFile = File(...)):
         if total_written <= 0:
             raise ValueError("Uploaded file cannot be empty.")
     except ValueError as ve:
-        shutil.rmtree(target_dir, ignore_errors=True)
-        with get_db() as conn:
-            conn.execute("UPDATE hosted_files SET is_deleted = 2 WHERE id = ?", (file_id,))
+        await asyncio.to_thread(shutil.rmtree, target_dir, True)
+        await asyncio.to_thread(_release_local_upload_claim, file_id, None, True)
         raise HTTPException(status_code=400, detail=str(ve))
     except Exception as e:
-        shutil.rmtree(target_dir, ignore_errors=True)
+        await asyncio.to_thread(shutil.rmtree, target_dir, True)
+        await asyncio.to_thread(_release_local_upload_claim, file_id, None, False)
         raise HTTPException(status_code=500, detail=f"Upload stream error: {e}")
 
-    with get_db() as conn:
-        conn.execute(
-            "UPDATE hosted_files SET file_size = ?, upload_confirmed = 1 WHERE id = ?",
-            (total_written, file_id),
-        )
-
+    committed = await asyncio.to_thread(_release_local_upload_claim, file_id, total_written, False)
+    if not committed:
+        await asyncio.to_thread(shutil.rmtree, target_dir, True)
+        raise HTTPException(status_code=404, detail="Upload session was cancelled or deleted.")
     return {"status": "success", "message": "File uploaded", "file_id": file_id}
 
 
@@ -147,7 +210,8 @@ async def upload_direct(file_id: str, file: UploadFile = File(...)):
 async def complete_multipart(file_id: str, req: CompleteMultipartRequest):
     """Completes a browser R2 multipart upload and confirms the hosted session."""
     try:
-        meta = await asyncio.to_thread(complete_multipart_session, file_id, req.upload_id, req.parts)
+        parts_payload = [{"PartNumber": p.PartNumber, "ETag": p.ETag} for p in req.parts]
+        meta = await asyncio.to_thread(complete_multipart_session, file_id, req.upload_id, parts_payload)
         return {"status": "success", "file": meta}
     except ValueError as ve:
         raise HTTPException(status_code=400, detail=str(ve))
@@ -157,9 +221,14 @@ async def complete_multipart(file_id: str, req: CompleteMultipartRequest):
 
 @router.post("/abort-multipart/{file_id}")
 async def abort_multipart(file_id: str, req: AbortMultipartRequest):
-    """Aborts an in-flight or failed R2 multipart upload cleanly."""
-    await asyncio.to_thread(abort_multipart_session, file_id, req.upload_id)
-    return {"status": "success"}
+    """Aborts an in-flight or failed R2 multipart upload cleanly when upload_id matches."""
+    try:
+        await asyncio.to_thread(abort_multipart_session, file_id, req.upload_id)
+        return {"status": "success"}
+    except PermissionError as pe:
+        raise HTTPException(status_code=403, detail=str(pe))
+    except ValueError as ve:
+        raise HTTPException(status_code=400, detail=str(ve))
 
 
 @router.post("/confirm-upload/{file_id}")
@@ -177,7 +246,7 @@ async def confirm_upload(file_id: str):
 @router.get("/info/{file_id}")
 async def get_info(file_id: str):
     """Public metadata for the anonymous download page."""
-    meta = get_file_metadata(file_id)
+    meta = await asyncio.to_thread(get_file_metadata, file_id)
     if not meta:
         raise HTTPException(status_code=404, detail="File does not exist or has expired.")
     return {"status": "success", "file": meta}
@@ -194,7 +263,7 @@ async def download_file(
     """
     password = req.password if req else None
     try:
-        res = prepare_download(file_id, password, issue_stream_token=True)
+        res = await asyncio.to_thread(prepare_download, file_id, password, True)
         return {"status": "success", "download_url": res["url"], "filename": res["filename"]}
     except PermissionError as pe:
         raise HTTPException(status_code=401, detail=str(pe))
@@ -212,7 +281,7 @@ async def stream_local_file(
 ):
     """Streams a local-fallback hosted file directly to disk using a one-time stream token."""
     try:
-        res = consume_local_stream_token(file_id, token)
+        res = await asyncio.to_thread(consume_local_stream_token, file_id, token)
         if res.get("burn") and res.get("file_dir"):
             background_tasks.add_task(_cleanup_local_dir, res["file_dir"], file_id)
         return FileResponse(
@@ -232,7 +301,7 @@ async def direct_download(
 ):
     """GET endpoint allowing direct browser downloads."""
     try:
-        res = prepare_download(file_id, p, issue_stream_token=False)
+        res = await asyncio.to_thread(prepare_download, file_id, p, False)
         if res["type"] == "redirect":
             return RedirectResponse(url=res["url"])
         if res.get("burn") and res.get("file_dir"):
@@ -254,10 +323,12 @@ async def direct_download(
 async def delete_file(file_id: str, token: str = Query(...)):
     """Allows anonymous uploader to delete the file immediately using their secret delete token."""
     try:
-        success = delete_hosted_file(file_id, token)
+        success = await asyncio.to_thread(delete_hosted_file, file_id, token)
         if not success:
             raise HTTPException(status_code=404, detail="File already deleted or not found.")
         return {"status": "success", "message": "File deleted permanently."}
+    except HTTPException:
+        raise
     except PermissionError as pe:
         raise HTTPException(status_code=403, detail=str(pe))
     except Exception as e:
@@ -267,15 +338,7 @@ async def delete_file(file_id: str, token: str = Query(...)):
 @router.post("/report/{file_id}")
 async def report_file(file_id: str, req: ReportRequest):
     """Logs abuse/DMCA report for an active hosted file."""
-    with get_db() as conn:
-        exists = conn.execute(
-            "SELECT 1 FROM hosted_files WHERE id = ? AND is_deleted < 2",
-            (file_id,),
-        ).fetchone()
-        if not exists:
-            raise HTTPException(status_code=404, detail="Hosted file not found.")
-        conn.execute(
-            "INSERT INTO file_reports (file_id, reason, created_at) VALUES (?, ?, ?)",
-            (file_id, req.reason, int(time.time())),
-        )
+    recorded = await asyncio.to_thread(_record_file_report, file_id, req.reason)
+    if not recorded:
+        raise HTTPException(status_code=404, detail="Hosted file not found.")
     return {"status": "success", "message": "Report received."}

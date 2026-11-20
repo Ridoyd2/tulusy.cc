@@ -1,4 +1,4 @@
-import { ALL_FORMATS, getCompatibleTargets } from './formatRegistry';
+import { ALL_FORMATS, getAcceptForFormat, getCompatibleTargets } from './formatRegistry';
 
 export interface FormatPairSEO {
   slug: string;
@@ -192,9 +192,9 @@ export const POPULAR_SEO_PAIRS: FormatPairSEO[] = [
     sourceName: 'Excel Spreadsheet (XLSX)',
     targetName: 'PDF Document',
     title: 'Convert Excel to PDF Online - Free XLSX to Tabular PDF',
-    description: 'Convert Microsoft Excel (.xlsx, .xls) workbooks into clean, printable landscape PDF tables. Preserves headers, cell values, and multi-sheet layouts.',
+    description: 'Convert Microsoft Excel (.xlsx) workbooks into clean, printable landscape PDF tables. Preserves headers, cell values, and multi-sheet layouts.',
     keywords: ['excel to pdf', 'convert xlsx to pdf', 'spreadsheet to pdf', 'free excel to pdf converter', 'online xlsx to pdf'],
-    accept: '.xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    accept: '.xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
     faqs: [
       {
         q: 'How are multi-sheet Excel files converted to PDF?',
@@ -353,7 +353,7 @@ export const POPULAR_SEO_PAIRS: FormatPairSEO[] = [
     title: 'Convert Word (DOCX) to PDF Online Free',
     description: 'Convert Microsoft Word DOCX documents into standard PDF files online for free. Preserves layout, typography, and page design for printing & sharing.',
     keywords: ['word to pdf', 'convert docx to pdf', 'doc to pdf online', 'free word to pdf converter', 'save docx as pdf'],
-    accept: '.docx,.doc,application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    accept: '.docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document',
     faqs: [
       {
         q: 'Why convert Word documents to PDF before sharing?',
@@ -450,6 +450,32 @@ export function getSEOPair(slug: string): FormatPairSEO | undefined {
 
   const srcUpper = srcFmt.ext.toUpperCase();
   const tgtUpper = tgtFmt.ext.toUpperCase();
+  const isImageTarget = ['image', 'vector', 'icon'].includes(tgtFmt.category);
+  const isDocSource = ['pdf', 'docx', 'pptx', 'xlsx', 'csv', 'txt'].includes(srcFmt.ext);
+  const isImageToPdf = tgtFmt.ext === 'pdf' && !isDocSource;
+
+  const description = isImageTarget
+    ? `Convert ${srcUpper} to ${tgtUpper} online for free. Fast, private ${srcUpper} conversion with custom DPI, resize, and quality controls—zero retention.`
+    : isImageToPdf
+    ? `Convert ${srcUpper} images into a crisp, portable PDF document online for free. Supports custom DPI, dimensions, and zero-retention ephemeral processing.`
+    : tgtFmt.ext === 'pdf'
+    ? `Convert ${srcUpper} documents into universal print-ready PDF files online for free. Preserves clean layout, text, and tables with zero file retention.`
+    : `Convert ${srcUpper} files to ${tgtUpper} online for free. Fast, accurate text, layout, and structured data extraction with ephemeral zero-retention processing.`;
+
+  const qualityFaq = isImageTarget
+    ? {
+        q: `Does converting ${srcUpper} to ${tgtUpper} preserve image quality?`,
+        a: `Yes. Tulusy uses precision Pillow, HEIF, and vector rasterization pipelines with customizable quality, DPI, grayscale, and resolution controls so your ${tgtUpper} output looks sharp.`,
+      }
+    : isImageToPdf
+    ? {
+        q: `Does converting ${srcUpper} to PDF preserve image resolution?`,
+        a: `Yes. You can customize target DPI resolution, output dimensions, and background fill color before exporting your ${srcUpper} images into a universal PDF.`,
+      }
+    : {
+        q: `Does converting ${srcUpper} to ${tgtUpper} preserve formatting and content?`,
+        a: `Yes. Our server-side document engine preserves readable text, slide order, or structured spreadsheet cells as cleanly as possible while converting ${srcUpper} to ${tgtUpper}.`,
+      };
 
   return {
     slug: `${srcFmt.ext}-to-${tgtFmt.ext}`,
@@ -458,7 +484,7 @@ export function getSEOPair(slug: string): FormatPairSEO | undefined {
     sourceName: srcFmt.name,
     targetName: tgtFmt.name,
     title: `Convert ${srcUpper} to ${tgtUpper} Online - Free & Fast`,
-    description: `Convert ${srcUpper} files to ${tgtUpper} online for free. Fast, private ${srcFmt.ext.toUpperCase()} conversion with custom quality controls and zero file retention.`,
+    description,
     keywords: [
       `${srcFmt.ext} to ${tgtFmt.ext}`,
       `convert ${srcFmt.ext} to ${tgtFmt.ext}`,
@@ -466,16 +492,13 @@ export function getSEOPair(slug: string): FormatPairSEO | undefined {
       `online ${srcFmt.ext} converter`,
       `${srcFmt.name} to ${tgtFmt.name}`,
     ],
-    accept: `.${srcFmt.ext},${srcFmt.mime}`,
+    accept: getAcceptForFormat(srcFmt.ext),
     faqs: [
       {
         q: `How do I convert ${srcUpper} to ${tgtUpper} online for free?`,
         a: `Drag and drop your .${srcFmt.ext} file into the converter above, verify ${tgtUpper} is selected as the output format, and click "Convert". Your .${tgtFmt.ext} file will be ready to download immediately.`,
       },
-      {
-        q: `Does converting ${srcUpper} to ${tgtUpper} preserve quality?`,
-        a: `Yes. Tulusy uses high-precision decoding and encoding pipelines with customizable DPI, compression quality, and resolution controls so your ${tgtUpper} output retains maximum visual and structural fidelity.`,
-      },
+      qualityFaq,
       {
         q: `Are my ${srcUpper} files kept private during conversion?`,
         a: `Yes. All conversions are processed ephemerally and deleted automatically immediately after your download completes.`,
@@ -509,6 +532,47 @@ export function getAllSEOSlugs(): string[] {
   }
 
   return Array.from(seen);
+}
+
+export function getRelatedSEOPairs(pair: FormatPairSEO, limit: number = 8): FormatPairSEO[] {
+  const seen = new Set<string>([pair.slug]);
+  const orderedSlugs: string[] = [];
+
+  const pushSlug = (candidate: string) => {
+    const canonical = resolveCanonicalSlug(candidate);
+    if (!seen.has(canonical)) {
+      seen.add(canonical);
+      orderedSlugs.push(canonical);
+    }
+  };
+
+  // Prioritize the reverse direction when supported (e.g., webp-to-png <-> png-to-webp)
+  pushSlug(`${pair.target}-to-${pair.source}`);
+
+  // Interleave same-source and same-target pairs for balanced topical internal linking
+  const sameSourceSlugs = getCompatibleTargets(pair.source).map(
+    t => `${pair.source}-to-${t.ext}`
+  );
+  const sameTargetSlugs = ALL_FORMATS.filter(f =>
+    getCompatibleTargets(f.ext).some(t => t.ext === pair.target)
+  ).map(f => `${f.ext}-to-${pair.target}`);
+
+  const maxLen = Math.max(sameSourceSlugs.length, sameTargetSlugs.length);
+  for (let i = 0; i < maxLen && orderedSlugs.length < limit; i++) {
+    if (i < sameSourceSlugs.length) pushSlug(sameSourceSlugs[i]);
+    if (orderedSlugs.length >= limit) break;
+    if (i < sameTargetSlugs.length) pushSlug(sameTargetSlugs[i]);
+  }
+
+  for (const popular of POPULAR_SEO_PAIRS) {
+    if (orderedSlugs.length >= limit) break;
+    pushSlug(popular.slug);
+  }
+
+  return orderedSlugs
+    .slice(0, limit)
+    .map(slug => getSEOPair(slug))
+    .filter((p): p is FormatPairSEO => Boolean(p));
 }
 
 export interface ConverterDirectoryGroup {

@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useRef, useMemo, useSyncExternalStore } from 'react';
+import React, { useState, useRef, useMemo, useSyncExternalStore, useEffect } from 'react';
 import QRCode from 'qrcode';
 import {
   HardDriveUpload,
@@ -61,10 +61,36 @@ function uploadBlobViaXhr(
   options?: {
     contentType?: string;
     onProgress?: (loaded: number, total: number) => void;
+    signal?: AbortSignal;
   }
 ): Promise<string | null> {
   return new Promise<string | null>((resolve, reject) => {
+    if (options?.signal?.aborted) {
+      reject(new Error('Upload aborted.'));
+      return;
+    }
+
     const xhr = new XMLHttpRequest();
+    let settled = false;
+
+    const cleanup = () => {
+      if (options?.signal) {
+        options.signal.removeEventListener('abort', onAbort);
+      }
+    };
+
+    const onAbort = () => {
+      if (settled) return;
+      settled = true;
+      xhr.abort();
+      cleanup();
+      reject(new Error('Upload aborted.'));
+    };
+
+    if (options?.signal) {
+      options.signal.addEventListener('abort', onAbort, { once: true });
+    }
+
     xhr.open(method, url);
     if (options?.contentType) {
       xhr.setRequestHeader('Content-Type', options.contentType);
@@ -77,6 +103,9 @@ function uploadBlobViaXhr(
     };
 
     xhr.onload = () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
       if (xhr.status >= 200 && xhr.status < 300) {
         resolve(xhr.getResponseHeader('ETag') || xhr.getResponseHeader('etag'));
       } else {
@@ -89,8 +118,24 @@ function uploadBlobViaXhr(
       }
     };
 
-    xhr.onerror = () => reject(new Error('Network error during file upload.'));
-    xhr.ontimeout = () => reject(new Error('Upload timed out.'));
+    xhr.onerror = () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(new Error('Network error during file upload.'));
+    };
+    xhr.ontimeout = () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(new Error('Upload timed out.'));
+    };
+    xhr.onabort = () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(new Error('Upload aborted.'));
+    };
     xhr.send(body);
   });
 }
@@ -222,16 +267,25 @@ export const FileHostTool: React.FC = () => {
   const [deletingShareId, setDeletingShareId] = useState<string | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const uploadAbortRef = useRef<AbortController | null>(null);
+
+  useEffect(() => {
+    return () => {
+      uploadAbortRef.current?.abort();
+    };
+  }, []);
 
   const formatBytes = (bytes: number) => {
-    if (bytes === 0) return '0 B';
+    if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';
+    if (bytes < 1) return `${bytes.toFixed(2)} B`;
     const k = 1024;
     const sizes = ['B', 'KB', 'MB', 'GB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    const i = Math.max(0, Math.min(sizes.length - 1, Math.floor(Math.log(bytes) / Math.log(k))));
     return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
   };
 
   const handleFileSelect = (selectedFile: File) => {
+    if (isUploading) return;
     setErrorMessage(null);
     const maxBytes = 5 * 1024 * 1024 * 1024; // 5 GB
     if (selectedFile.size > maxBytes) {
@@ -249,13 +303,17 @@ export const FileHostTool: React.FC = () => {
     e.preventDefault();
     e.stopPropagation();
     setIsDragging(false);
+    if (isUploading) return;
     if (e.dataTransfer.files && e.dataTransfer.files[0]) {
       handleFileSelect(e.dataTransfer.files[0]);
     }
   };
 
   const handleStartUpload = async () => {
-    if (!file) return;
+    if (!file || isUploading) return;
+
+    const controller = new AbortController();
+    uploadAbortRef.current = controller;
 
     setIsUploading(true);
     setProgress(0);
@@ -270,6 +328,7 @@ export const FileHostTool: React.FC = () => {
       const initResp = await fetch(`${apiUrl}/api/hosting/init-upload`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        signal: controller.signal,
         body: JSON.stringify({
           filename: file.name,
           file_size: file.size,
@@ -325,6 +384,23 @@ export const FileHostTool: React.FC = () => {
         const completedParts: Array<{ PartNumber: number; ETag: string }> = new Array(parts.length);
         let cursor = 0;
 
+        const sleepAbortable = (ms: number, signal: AbortSignal) =>
+          new Promise<void>((resolve, reject) => {
+            if (signal.aborted) {
+              reject(new Error('Upload aborted.'));
+              return;
+            }
+            const onAbort = () => {
+              clearTimeout(timer);
+              reject(new Error('Upload aborted.'));
+            };
+            const timer = setTimeout(() => {
+              signal.removeEventListener('abort', onAbort);
+              resolve();
+            }, ms);
+            signal.addEventListener('abort', onAbort, { once: true });
+          });
+
         const uploadSinglePart = async (partIdx: number) => {
           const part = parts[partIdx];
           const start = (part.part_number - 1) * partSize;
@@ -332,8 +408,12 @@ export const FileHostTool: React.FC = () => {
           const chunk = file.slice(start, end);
 
           for (let attempt = 0; attempt < 3; attempt++) {
+            if (controller.signal.aborted) {
+              throw new Error('Upload aborted.');
+            }
             try {
               const etag = await uploadBlobViaXhr('PUT', part.upload_url, chunk, {
+                signal: controller.signal,
                 onProgress: (loaded) => {
                   loadedByPart[partIdx] = loaded;
                   reportProgress(loadedByPart.reduce((a, b) => a + b, 0));
@@ -347,9 +427,9 @@ export const FileHostTool: React.FC = () => {
               completedParts[partIdx] = { PartNumber: part.part_number, ETag: etag };
               return;
             } catch (partErr) {
-              if (attempt === 2) throw partErr;
+              if (controller.signal.aborted || attempt === 2) throw partErr;
               loadedByPart[partIdx] = 0;
-              await new Promise(r => setTimeout(r, 600 * (attempt + 1)));
+              await sleepAbortable(600 * (attempt + 1), controller.signal);
             }
           }
         };
@@ -358,7 +438,7 @@ export const FileHostTool: React.FC = () => {
           const workers = Array.from(
             { length: Math.min(MULTIPART_CONCURRENCY, parts.length) },
             async () => {
-              while (cursor < parts.length) {
+              while (cursor < parts.length && !controller.signal.aborted) {
                 const idx = cursor++;
                 await uploadSinglePart(idx);
               }
@@ -366,8 +446,12 @@ export const FileHostTool: React.FC = () => {
           );
           await Promise.all(workers);
 
+          if (controller.signal.aborted) {
+            throw new Error('Upload aborted.');
+          }
+
           setStatusMessage('Finalizing multipart upload...');
-          const completeResp = await fetch(`${apiUrl}/api/hosting/complete-multipart/${session.file_id}`, {
+          const completeResp = await fetch(`${apiUrl}/api/hosting/complete-multipart/${encodeURIComponent(session.file_id)}`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ upload_id: uploadId, parts: completedParts }),
@@ -377,7 +461,8 @@ export const FileHostTool: React.FC = () => {
             throw new Error(errData.detail || 'Could not finalize multipart upload');
           }
         } catch (mpErr) {
-          await fetch(`${apiUrl}/api/hosting/abort-multipart/${session.file_id}`, {
+          controller.abort();
+          await fetch(`${apiUrl}/api/hosting/abort-multipart/${encodeURIComponent(session.file_id)}`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ upload_id: uploadId }),
@@ -400,13 +485,17 @@ export const FileHostTool: React.FC = () => {
         }
 
         await uploadBlobViaXhr(method, uploadUrl, body, {
-          contentType: session.storage_type === 'r2' ? file.type || 'application/octet-stream' : undefined,
+          contentType:
+            session.storage_type === 'r2'
+              ? session.content_type || file.type || 'application/octet-stream'
+              : undefined,
+          signal: controller.signal,
           onProgress: (loaded) => reportProgress(loaded),
         });
 
         // 3. Confirm upload
         setStatusMessage('Finalizing metadata...');
-        const confirmResp = await fetch(`${apiUrl}/api/hosting/confirm-upload/${session.file_id}`, {
+        const confirmResp = await fetch(`${apiUrl}/api/hosting/confirm-upload/${encodeURIComponent(session.file_id)}`, {
           method: 'POST',
         });
         if (!confirmResp.ok) {
@@ -416,11 +505,11 @@ export const FileHostTool: React.FC = () => {
       }
 
       const origin = typeof window !== 'undefined' ? window.location.origin : SITE_URL;
-      const shareUrl = `${origin}/f/${session.file_id}`;
+      const shareUrl = `${origin}/f/${encodeURIComponent(session.file_id)}`;
 
       const uploadResult: UploadResult = {
         fileId: session.file_id,
-        filename: file.name,
+        filename: session.filename || file.name,
         fileSize: file.size,
         shareUrl,
         deleteToken: session.delete_token,
@@ -438,20 +527,31 @@ export const FileHostTool: React.FC = () => {
 
       setFile(null);
       setConfirmDelete(false);
-      setIsUploading(false);
     } catch (err: unknown) {
-      setIsUploading(false);
       setErrorMessage(
         err instanceof Error ? err.message : 'An unexpected error occurred during upload.'
       );
+    } finally {
+      uploadAbortRef.current = null;
+      setIsUploading(false);
     }
   };
 
-  const handleCopyLink = () => {
+  const copyTextSafe = async (text: string): Promise<boolean> => {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  const handleCopyLink = async () => {
     if (!result) return;
-    navigator.clipboard.writeText(result.shareUrl);
-    setCopiedLink(true);
-    setTimeout(() => setCopiedLink(false), 2000);
+    if (await copyTextSafe(result.shareUrl)) {
+      setCopiedLink(true);
+      setTimeout(() => setCopiedLink(false), 2000);
+    }
   };
 
   const deleteShareById = async (fileId: string, deleteToken: string) => {
@@ -461,7 +561,7 @@ export const FileHostTool: React.FC = () => {
     try {
       const apiUrl = getApiBaseUrl();
       const resp = await fetch(
-        `${apiUrl}/api/hosting/delete/${fileId}?token=${encodeURIComponent(deleteToken)}`,
+        `${apiUrl}/api/hosting/delete/${encodeURIComponent(fileId)}?token=${encodeURIComponent(deleteToken)}`,
         { method: 'DELETE' }
       );
       if (resp.ok || resp.status === 404) {
@@ -469,6 +569,7 @@ export const FileHostTool: React.FC = () => {
         saveRecentShares(nextShares);
         if (result?.fileId === fileId) {
           setResult(null);
+          setPassword('');
           setConfirmDelete(false);
         }
         setConfirmRecentDeleteId(null);
@@ -541,7 +642,7 @@ export const FileHostTool: React.FC = () => {
               onDragOver={(e) => {
                 e.preventDefault();
                 e.stopPropagation();
-                setIsDragging(true);
+                if (!isUploading) setIsDragging(true);
               }}
               onDragLeave={(e) => {
                 e.preventDefault();
@@ -549,16 +650,22 @@ export const FileHostTool: React.FC = () => {
                 setIsDragging(false);
               }}
               onDrop={handleDrop}
-              onClick={() => fileInputRef.current?.click()}
-              className={`border border-dashed rounded-xl p-6 sm:p-10 text-center cursor-pointer transition-all flex flex-col items-center justify-center gap-3 ${
-                isDragging
-                  ? 'border-blue-600 bg-blue-50/50 dark:bg-blue-950/20'
-                  : 'border-slate-300 dark:border-slate-700 hover:border-slate-400 dark:hover:border-slate-600 bg-slate-50/50 dark:bg-slate-900/40'
+              onClick={() => {
+                if (!isUploading) fileInputRef.current?.click();
+              }}
+              className={`border border-dashed rounded-xl p-6 sm:p-10 text-center transition-all flex flex-col items-center justify-center gap-3 ${
+                isUploading
+                  ? 'border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/40 cursor-not-allowed opacity-75'
+                  : isDragging
+                  ? 'border-blue-600 bg-blue-50/50 dark:bg-blue-950/20 cursor-pointer'
+                  : 'border-slate-300 dark:border-slate-700 hover:border-slate-400 dark:hover:border-slate-600 bg-slate-50/50 dark:bg-slate-900/40 cursor-pointer'
               }`}
             >
               <input
                 ref={fileInputRef}
                 type="file"
+                disabled={isUploading}
+                onClick={(e) => e.stopPropagation()}
                 className="hidden"
                 onChange={(e) => {
                   if (e.target.files && e.target.files[0]) {
@@ -874,10 +981,12 @@ export const FileHostTool: React.FC = () => {
                     <div className="flex flex-wrap items-center gap-1.5 shrink-0 text-xs">
                       <button
                         type="button"
-                        onClick={() => {
-                          navigator.clipboard.writeText(share.shareUrl);
-                          setCopiedRecentId(share.fileId);
-                          setTimeout(() => setCopiedRecentId(null), 1800);
+                        onClick={async () => {
+                          const safeHref = `${window.location.origin}/f/${encodeURIComponent(share.fileId)}`;
+                          if (await copyTextSafe(safeHref)) {
+                            setCopiedRecentId(share.fileId);
+                            setTimeout(() => setCopiedRecentId(null), 1800);
+                          }
                         }}
                         className="px-2.5 py-1 rounded-md border border-slate-200 dark:border-slate-700 hover:bg-white dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 font-medium flex items-center gap-1 cursor-pointer"
                       >
@@ -886,7 +995,7 @@ export const FileHostTool: React.FC = () => {
                       </button>
 
                       <a
-                        href={share.shareUrl}
+                        href={`/f/${encodeURIComponent(share.fileId)}`}
                         target="_blank"
                         rel="noreferrer"
                         className="px-2.5 py-1 rounded-md border border-slate-200 dark:border-slate-700 hover:bg-white dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 font-medium flex items-center gap-1"

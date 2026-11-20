@@ -9,8 +9,8 @@ import { FormatPairSelector } from '@/components/FormatPairSelector';
 import { SettingsModal } from '@/components/SettingsModal';
 import { Footer } from '@/components/Footer';
 import { DEFAULT_CONVERSION_SETTINGS, useConversionQueue } from '@/hooks/useConversionQueue';
-import { DEFAULT_TARGET_FORMATS, getCompatibleTargets } from '@/lib/formatRegistry';
-import { FormatPairSEO, POPULAR_SEO_PAIRS, resolveCanonicalSlug } from '@/lib/seoData';
+import { DEFAULT_TARGET_FORMATS, getCompatibleTargets, normalizeFormatExt } from '@/lib/formatRegistry';
+import { FormatPairSEO, getRelatedSEOPairs, resolveCanonicalSlug } from '@/lib/seoData';
 import { ArrowRight, ChevronDown } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
@@ -57,7 +57,9 @@ export const ConvertClient: React.FC<ConvertClientProps> = ({ seoData }) => {
     lockTargetToInitial: true,
   });
 
-  const otherPairs = POPULAR_SEO_PAIRS.filter(p => p.slug !== seoData.slug);
+  const relatedPairs = getRelatedSEOPairs(seoData, 8);
+  const uniqueBatchSources = new Set(files.map(f => normalizeFormatExt(f.sourceExt)));
+  const batchSourceExt = uniqueBatchSources.size === 1 ? Array.from(uniqueBatchSources)[0] : undefined;
 
   return (
     <div className="min-h-screen flex flex-col">
@@ -65,7 +67,7 @@ export const ConvertClient: React.FC<ConvertClientProps> = ({ seoData }) => {
 
       <main className="flex-1 max-w-5xl w-full mx-auto px-3 sm:px-6 lg:px-8 pt-6 sm:pt-10 pb-16 space-y-12">
         {/* Breadcrumb Navigation */}
-        <nav className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
+        <nav aria-label="Breadcrumb" className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
           <Link href="/" className="hover:text-slate-900 dark:hover:text-white transition-colors">
             Home
           </Link>
@@ -145,7 +147,7 @@ export const ConvertClient: React.FC<ConvertClientProps> = ({ seoData }) => {
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3.5">
-            <div className="p-4 rounded-lg bg-slate-50 dark:bg-slate-800/40 border border-slate-200/70 dark:border-slate-800 space-y-2">
+            <div id="upload" className="scroll-mt-20 p-4 rounded-lg bg-slate-50 dark:bg-slate-800/40 border border-slate-200/70 dark:border-slate-800 space-y-2">
               <div className="w-6 h-6 rounded-md bg-slate-900 dark:bg-white text-white dark:text-slate-900 font-mono font-bold text-xs flex items-center justify-center">
                 1
               </div>
@@ -155,7 +157,7 @@ export const ConvertClient: React.FC<ConvertClientProps> = ({ seoData }) => {
               </p>
             </div>
 
-            <div className="p-4 rounded-lg bg-slate-50 dark:bg-slate-800/40 border border-slate-200/70 dark:border-slate-800 space-y-2">
+            <div id="convert" className="scroll-mt-20 p-4 rounded-lg bg-slate-50 dark:bg-slate-800/40 border border-slate-200/70 dark:border-slate-800 space-y-2">
               <div className="w-6 h-6 rounded-md bg-slate-900 dark:bg-white text-white dark:text-slate-900 font-mono font-bold text-xs flex items-center justify-center">
                 2
               </div>
@@ -165,7 +167,7 @@ export const ConvertClient: React.FC<ConvertClientProps> = ({ seoData }) => {
               </p>
             </div>
 
-            <div className="p-4 rounded-lg bg-slate-50 dark:bg-slate-800/40 border border-slate-200/70 dark:border-slate-800 space-y-2">
+            <div id="download" className="scroll-mt-20 p-4 rounded-lg bg-slate-50 dark:bg-slate-800/40 border border-slate-200/70 dark:border-slate-800 space-y-2">
               <div className="w-6 h-6 rounded-md bg-emerald-600 text-white font-mono font-bold text-xs flex items-center justify-center">
                 3
               </div>
@@ -201,19 +203,29 @@ export const ConvertClient: React.FC<ConvertClientProps> = ({ seoData }) => {
                   <td className="p-3.5 text-slate-900 dark:text-slate-100">{seoData.targetName}</td>
                 </tr>
                 <tr className="bg-slate-50/50 dark:bg-slate-900/40">
+                  <td className="p-3.5 font-medium text-slate-500">Format Category</td>
+                  <td className="p-3.5 text-slate-700 dark:text-slate-300">{seoData.sourceSpecs.type}</td>
+                  <td className="p-3.5 text-slate-700 dark:text-slate-300">{seoData.targetSpecs.type}</td>
+                </tr>
+                <tr className="bg-white dark:bg-slate-950">
                   <td className="p-3.5 font-medium text-slate-500">Standard / Developer</td>
                   <td className="p-3.5 text-slate-700 dark:text-slate-300">{seoData.sourceSpecs.developer}</td>
                   <td className="p-3.5 text-slate-700 dark:text-slate-300">{seoData.targetSpecs.developer}</td>
                 </tr>
-                <tr className="bg-white dark:bg-slate-950">
+                <tr className="bg-slate-50/50 dark:bg-slate-900/40">
                   <td className="p-3.5 font-medium text-slate-500">MIME Type</td>
                   <td className="p-3.5 font-mono text-xs text-slate-700 dark:text-slate-300">{seoData.sourceSpecs.mime}</td>
                   <td className="p-3.5 font-mono text-xs text-slate-700 dark:text-slate-300">{seoData.targetSpecs.mime}</td>
                 </tr>
-                <tr className="bg-slate-50/50 dark:bg-slate-900/40">
+                <tr className="bg-white dark:bg-slate-950">
                   <td className="p-3.5 font-medium text-slate-500">Compression Profile</td>
                   <td className="p-3.5 text-slate-700 dark:text-slate-300">{seoData.sourceSpecs.compression}</td>
                   <td className="p-3.5 text-slate-700 dark:text-slate-300">{seoData.targetSpecs.compression}</td>
+                </tr>
+                <tr className="bg-slate-50/50 dark:bg-slate-900/40">
+                  <td className="p-3.5 font-medium text-slate-500">Key Strengths</td>
+                  <td className="p-3.5 text-slate-700 dark:text-slate-300">{seoData.sourceSpecs.pros.join(' · ')}</td>
+                  <td className="p-3.5 text-slate-700 dark:text-slate-300">{seoData.targetSpecs.pros.join(' · ')}</td>
                 </tr>
               </tbody>
             </table>
@@ -238,6 +250,7 @@ export const ConvertClient: React.FC<ConvertClientProps> = ({ seoData }) => {
                 >
                   <button
                     type="button"
+                    aria-expanded={isOpen}
                     onClick={() => setOpenFaqIdx(isOpen ? null : idx)}
                     className="w-full p-4 text-left flex items-center justify-between gap-4 font-medium text-xs sm:text-sm text-slate-900 dark:text-white cursor-pointer"
                   >
@@ -264,9 +277,9 @@ export const ConvertClient: React.FC<ConvertClientProps> = ({ seoData }) => {
         {/* Related Conversions Grid */}
         <section className="space-y-3.5 pt-6 border-t border-slate-200 dark:border-slate-800">
           <div className="flex items-center justify-between gap-3">
-            <h3 className="text-sm sm:text-base font-semibold text-slate-900 dark:text-white">
+            <h2 className="text-sm sm:text-base font-semibold text-slate-900 dark:text-white">
               Related Format Converters
-            </h3>
+            </h2>
             <Link
               href="/convert"
               className="text-xs font-medium text-blue-600 dark:text-blue-400 hover:underline inline-flex items-center gap-1"
@@ -277,7 +290,7 @@ export const ConvertClient: React.FC<ConvertClientProps> = ({ seoData }) => {
           </div>
 
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
-            {otherPairs.slice(0, 8).map(p => (
+            {relatedPairs.map(p => (
               <Link
                 key={p.slug}
                 href={`/convert/${p.slug}`}
@@ -301,7 +314,7 @@ export const ConvertClient: React.FC<ConvertClientProps> = ({ seoData }) => {
           handleSelectAllFormat(fmt);
           setIsBatchFormatOpen(false);
         }}
-        sourceExt={undefined}
+        sourceExt={batchSourceExt}
         currentSelected={files[0]?.targetFormat || seoData.target}
         mode="target"
       />

@@ -2,7 +2,7 @@ import React from 'react';
 import Link from 'next/link';
 import { Navbar } from './Navbar';
 import { Footer } from './Footer';
-import { SITE_URL } from '@/lib/site';
+import { safeJsonLd, SITE_URL } from '@/lib/site';
 
 interface LegalPageShellProps {
   title: string;
@@ -43,14 +43,14 @@ export const LegalPageShell: React.FC<LegalPageShellProps> = ({
     <>
       <script
         type="application/ld+json"
-        dangerouslySetInnerHTML={{ __html: JSON.stringify(breadcrumbSchema) }}
+        dangerouslySetInnerHTML={{ __html: safeJsonLd(breadcrumbSchema) }}
       />
 
       <div className="min-h-screen flex flex-col">
         <Navbar activeTool={null} />
 
         <main className="flex-1 max-w-4xl w-full mx-auto px-3 sm:px-6 lg:px-8 pt-6 sm:pt-10 pb-14 sm:pb-16 space-y-8">
-          <nav className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
+          <nav aria-label="Breadcrumb" className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
             <Link href="/" className="hover:text-slate-900 dark:hover:text-white transition-colors">
               Home
             </Link>

@@ -1,8 +1,8 @@
 import React from 'react';
 import { Metadata } from 'next';
-import { notFound } from 'next/navigation';
+import { notFound, permanentRedirect } from 'next/navigation';
 import { getSEOPair, getAllSEOSlugs } from '@/lib/seoData';
-import { SITE_URL } from '@/lib/site';
+import { safeJsonLd, SITE_ROOT_URL, SITE_URL } from '@/lib/site';
 import { ConvertClient } from './ConvertClient';
 
 interface PageProps {
@@ -22,6 +22,7 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
     return {
       title: 'Converter Not Found',
       description: 'The requested file converter could not be found.',
+      robots: { index: false, follow: false },
     };
   }
 
@@ -39,6 +40,7 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
       description: seoData.description,
       url: `${SITE_URL}/convert/${seoData.slug}`,
       siteName: 'Tulusy',
+      locale: 'en_US',
       type: 'website',
     },
     twitter: {
@@ -57,15 +59,26 @@ export default async function ConvertPage({ params }: PageProps) {
     notFound();
   }
 
+  if (slug !== seoData.slug) {
+    permanentRedirect(`/convert/${seoData.slug}`);
+  }
+
+  const isDocumentFlow =
+    ['pdf', 'docx', 'pptx', 'xlsx', 'csv', 'txt'].includes(seoData.source) ||
+    ['pdf', 'docx', 'pptx', 'xlsx', 'csv', 'txt'].includes(seoData.target);
+
   // 1. WebApplication Schema
   const webAppSchema = {
     '@context': 'https://schema.org',
     '@type': 'WebApplication',
     name: `Tulusy ${seoData.source.toUpperCase()} to ${seoData.target.toUpperCase()} Converter`,
     url: `${SITE_URL}/convert/${seoData.slug}`,
-    applicationCategory: 'MultimediaApplication',
+    applicationCategory: isDocumentFlow ? 'UtilitiesApplication' : 'MultimediaApplication',
     operatingSystem: 'All',
     browserRequirements: 'Requires JavaScript. Requires HTML5.',
+    publisher: {
+      '@id': `${SITE_URL}/#organization`,
+    },
     offers: {
       '@type': 'Offer',
       price: '0',
@@ -125,7 +138,7 @@ export default async function ConvertPage({ params }: PageProps) {
         '@type': 'ListItem',
         position: 1,
         name: 'Home',
-        item: `${SITE_URL}/`,
+        item: SITE_ROOT_URL,
       },
       {
         '@type': 'ListItem',
@@ -147,19 +160,19 @@ export default async function ConvertPage({ params }: PageProps) {
       {/* Inject Google Rich Snippets Structured Data */}
       <script
         type="application/ld+json"
-        dangerouslySetInnerHTML={{ __html: JSON.stringify(webAppSchema) }}
+        dangerouslySetInnerHTML={{ __html: safeJsonLd(webAppSchema) }}
       />
       <script
         type="application/ld+json"
-        dangerouslySetInnerHTML={{ __html: JSON.stringify(howToSchema) }}
+        dangerouslySetInnerHTML={{ __html: safeJsonLd(howToSchema) }}
       />
       <script
         type="application/ld+json"
-        dangerouslySetInnerHTML={{ __html: JSON.stringify(faqSchema) }}
+        dangerouslySetInnerHTML={{ __html: safeJsonLd(faqSchema) }}
       />
       <script
         type="application/ld+json"
-        dangerouslySetInnerHTML={{ __html: JSON.stringify(breadcrumbSchema) }}
+        dangerouslySetInnerHTML={{ __html: safeJsonLd(breadcrumbSchema) }}
       />
 
       <ConvertClient seoData={seoData} />

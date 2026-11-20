@@ -47,13 +47,22 @@ export const FileDownloadClient: React.FC<{ initialFile: FileInfo | null; fileId
   // Abuse Report Modal state
   const [showReportModal, setShowReportModal] = useState<boolean>(false);
   const [reportReason, setReportReason] = useState<string>('');
+  const [reportError, setReportError] = useState<string | null>(null);
   const [reportSuccess, setReportSuccess] = useState<boolean>(false);
   const [isReporting, setIsReporting] = useState<boolean>(false);
+  const [nowSec, setNowSec] = useState<number | null>(null);
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setNowSec(Math.floor(Date.now() / 1000));
+    }, 15000);
+    return () => clearInterval(timer);
+  }, []);
 
   useEffect(() => {
     if (!initialFile) {
       const apiUrl = getApiBaseUrl();
-      fetch(`${apiUrl}/api/hosting/info/${fileId}`, { cache: 'no-store' })
+      fetch(`${apiUrl}/api/hosting/info/${encodeURIComponent(fileId)}`, { cache: 'no-store' })
         .then(res => (res.ok ? res.json() : null))
         .then(data => {
           if (data?.file) setFile(data.file);
@@ -64,10 +73,11 @@ export const FileDownloadClient: React.FC<{ initialFile: FileInfo | null; fileId
   }, [initialFile, fileId]);
 
   const formatBytes = (bytes: number) => {
-    if (bytes === 0) return '0 B';
+    if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';
+    if (bytes < 1) return `${bytes.toFixed(2)} B`;
     const k = 1024;
     const sizes = ['B', 'KB', 'MB', 'GB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    const i = Math.max(0, Math.min(sizes.length - 1, Math.floor(Math.log(bytes) / Math.log(k))));
     return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
   };
 
@@ -94,7 +104,7 @@ export const FileDownloadClient: React.FC<{ initialFile: FileInfo | null; fileId
 
     try {
       const apiUrl = getApiBaseUrl();
-      const resp = await fetch(`${apiUrl}/api/hosting/download/${fileId}`, {
+      const resp = await fetch(`${apiUrl}/api/hosting/download/${encodeURIComponent(fileId)}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ password: password.trim() ? password.trim() : null }),
@@ -108,17 +118,18 @@ export const FileDownloadClient: React.FC<{ initialFile: FileInfo | null; fileId
       const contentType = resp.headers.get('content-type');
       if (contentType && contentType.includes('application/json')) {
         const data = (await resp.json()) as { download_url?: string; filename?: string };
-        if (data.download_url) {
-          const resolvedUrl = data.download_url.startsWith('http')
-            ? data.download_url
-            : `${apiUrl}${data.download_url}`;
-          const a = document.createElement('a');
-          a.href = resolvedUrl;
-          a.download = data.filename || file.filename || 'download';
-          document.body.appendChild(a);
-          a.click();
-          a.remove();
+        if (!data.download_url) {
+          throw new Error('Download URL was missing from server response.');
         }
+        const resolvedUrl = data.download_url.startsWith('http')
+          ? data.download_url
+          : `${apiUrl}${data.download_url}`;
+        const a = document.createElement('a');
+        a.href = resolvedUrl;
+        a.download = data.filename || file.filename || 'download';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
       } else {
         const blob = await resp.blob();
         const url = window.URL.createObjectURL(blob);
@@ -144,27 +155,51 @@ export const FileDownloadClient: React.FC<{ initialFile: FileInfo | null; fileId
   };
 
   const handleSubmitReport = async () => {
-    if (!reportReason.trim()) return;
+    const trimmed = reportReason.trim();
+    if (trimmed.length < 5) {
+      setReportError('Please enter at least 5 characters describing the issue.');
+      return;
+    }
     setIsReporting(true);
+    setReportError(null);
     try {
       const apiUrl = getApiBaseUrl();
-      await fetch(`${apiUrl}/api/hosting/report/${fileId}`, {
+      const resp = await fetch(`${apiUrl}/api/hosting/report/${encodeURIComponent(fileId)}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ reason: reportReason.trim() }),
+        body: JSON.stringify({ reason: trimmed }),
       });
+      if (!resp.ok) {
+        let msg = `Report failed (status ${resp.status}).`;
+        try {
+          const errJson = (await resp.json()) as { detail?: unknown };
+          if (typeof errJson.detail === 'string') {
+            msg = errJson.detail;
+          } else if (Array.isArray(errJson.detail) && errJson.detail[0]?.msg) {
+            msg = String(errJson.detail[0].msg);
+          }
+        } catch {}
+        throw new Error(msg);
+      }
       setReportSuccess(true);
       setTimeout(() => {
         setShowReportModal(false);
         setReportSuccess(false);
         setReportReason('');
+        setReportError(null);
       }, 2000);
-    } catch {
-      setErrorMessage('Failed to send report.');
+    } catch (err: unknown) {
+      setReportError(err instanceof Error ? err.message : 'Failed to send report.');
     } finally {
       setIsReporting(false);
     }
   };
+
+  const liveSecondsRemaining = file
+    ? nowSec !== null
+      ? Math.max(0, file.expires_at - nowSec)
+      : file.seconds_remaining
+    : 0;
 
   const ext = file?.filename.includes('.')
     ? file.filename.split('.').pop()?.toUpperCase() || 'FILE'
@@ -221,7 +256,7 @@ export const FileDownloadClient: React.FC<{ initialFile: FileInfo | null; fileId
                 <Clock className="w-4 h-4 text-slate-400 shrink-0" />
                 <div>
                   <p className="font-medium text-slate-800 dark:text-slate-200 tabular-nums">
-                    {burnedAfterDownload ? 'Purged after download' : formatTimeRemaining(file.seconds_remaining)}
+                    {burnedAfterDownload ? 'Purged after download' : formatTimeRemaining(liveSecondsRemaining)}
                   </p>
                   <p className="text-[11px] text-slate-500">Retention window</p>
                 </div>
@@ -304,7 +339,10 @@ export const FileDownloadClient: React.FC<{ initialFile: FileInfo | null; fileId
               </Link>
               <button
                 type="button"
-                onClick={() => setShowReportModal(true)}
+                onClick={() => {
+                  setReportError(null);
+                  setShowReportModal(true);
+                }}
                 className="hover:text-red-600 dark:hover:text-red-400 flex items-center gap-1 transition-colors cursor-pointer"
               >
                 <Flag className="w-3 h-3" />
@@ -378,10 +416,20 @@ export const FileDownloadClient: React.FC<{ initialFile: FileInfo | null; fileId
             <textarea
               rows={4}
               value={reportReason}
-              onChange={(e) => setReportReason(e.target.value)}
-              placeholder="Provide details..."
+              onChange={(e) => {
+                setReportReason(e.target.value);
+                if (reportError) setReportError(null);
+              }}
+              placeholder="Provide details (minimum 5 characters)..."
               className="w-full px-3 py-2 rounded-lg bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:border-blue-600"
             />
+
+            {reportError && (
+              <div className="p-2.5 rounded-lg bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-900/60 text-red-700 dark:text-red-300 text-xs flex items-center gap-2">
+                <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                <span>{reportError}</span>
+              </div>
+            )}
 
             {reportSuccess ? (
               <div className="p-2.5 rounded-lg bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 text-xs text-center font-medium">
@@ -391,14 +439,17 @@ export const FileDownloadClient: React.FC<{ initialFile: FileInfo | null; fileId
               <div className="flex items-center justify-end gap-2">
                 <button
                   type="button"
-                  onClick={() => setShowReportModal(false)}
+                  onClick={() => {
+                    setReportError(null);
+                    setShowReportModal(false);
+                  }}
                   className="px-3.5 py-1.5 rounded-lg text-xs font-medium text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
                 >
                   Cancel
                 </button>
                 <button
                   type="button"
-                  disabled={!reportReason.trim() || isReporting}
+                  disabled={reportReason.trim().length < 5 || isReporting}
                   onClick={handleSubmitReport}
                   className="px-3.5 py-1.5 rounded-lg text-xs font-medium bg-red-600 hover:bg-red-700 text-white disabled:opacity-50 cursor-pointer"
                 >

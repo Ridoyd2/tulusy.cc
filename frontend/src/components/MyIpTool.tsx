@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useSyncExternalStore } from 'react';
+import React, { useState, useEffect, useRef, useSyncExternalStore } from 'react';
 import {
   Copy,
   Check,
@@ -13,7 +13,7 @@ import {
   Terminal,
   Search
 } from 'lucide-react';
-import { fetchMyIp } from '../lib/api';
+import { fetchMyIp, measureApiRtt } from '../lib/api';
 import { IpDetailsResult } from '../types';
 
 let cachedScreenInfo: { res: string; depth: number } | null = null;
@@ -45,54 +45,65 @@ export const MyIpTool: React.FC = () => {
   const [copied, setCopied] = useState(false);
   const [pingMs, setPingMs] = useState<number | null>(null);
   const [isPinging, setIsPinging] = useState(false);
+  const requestSeqRef = useRef(0);
   const screenInfo = useSyncExternalStore(subscribeScreen, getScreenSnapshot, getServerScreenSnapshot);
 
   const loadIpInfo = async (targetIp?: string) => {
+    const mySeq = ++requestSeqRef.current;
     setIsLoading(true);
     setError(null);
     try {
       const data = await fetchMyIp(targetIp);
-      setIpData(data);
+      if (mySeq === requestSeqRef.current) {
+        setIpData(data);
+      }
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : 'Could not retrieve IP details');
+      if (mySeq === requestSeqRef.current) {
+        setError(err instanceof Error ? err.message : 'Could not retrieve IP details');
+      }
     } finally {
-      setIsLoading(false);
+      if (mySeq === requestSeqRef.current) {
+        setIsLoading(false);
+      }
     }
   };
 
   useEffect(() => {
     let cancelled = false;
+    const mySeq = ++requestSeqRef.current;
     fetchMyIp()
       .then(data => {
-        if (!cancelled) setIpData(data);
+        if (!cancelled && mySeq === requestSeqRef.current) setIpData(data);
       })
       .catch((err: unknown) => {
-        if (!cancelled) {
+        if (!cancelled && mySeq === requestSeqRef.current) {
           setError(err instanceof Error ? err.message : 'Could not retrieve IP details');
         }
       })
       .finally(() => {
-        if (!cancelled) setIsLoading(false);
+        if (!cancelled && mySeq === requestSeqRef.current) setIsLoading(false);
       });
     return () => {
       cancelled = true;
     };
   }, []);
 
-  const handleCopyIp = () => {
+  const handleCopyIp = async () => {
     if (!ipData?.ip) return;
-    navigator.clipboard.writeText(ipData.ip);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    try {
+      await navigator.clipboard.writeText(ipData.ip);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      // Clipboard API unavailable
+    }
   };
 
   const handlePingTest = async () => {
     setIsPinging(true);
-    const t0 = performance.now();
     try {
-      await fetchMyIp(ipData?.ip);
-      const t1 = performance.now();
-      setPingMs(Math.round(t1 - t0));
+      const rtt = await measureApiRtt();
+      setPingMs(rtt);
     } catch {
       setPingMs(null);
     } finally {
@@ -180,7 +191,10 @@ export const MyIpTool: React.FC = () => {
             <p className="text-red-600 dark:text-red-400 font-medium text-xs sm:text-sm">{error}</p>
             <button
               type="button"
-              onClick={() => loadIpInfo(undefined)}
+              onClick={() => {
+                setCustomIpInput('');
+                loadIpInfo(undefined);
+              }}
               className="px-4 py-2 rounded-lg bg-slate-900 dark:bg-white text-white dark:text-slate-900 text-xs font-medium cursor-pointer"
             >
               Reset to My IP
@@ -243,7 +257,7 @@ export const MyIpTool: React.FC = () => {
               <div className="flex justify-between items-center pt-1.5">
                 <span className="text-slate-500">Region / City</span>
                 <span className="font-medium text-slate-900 dark:text-slate-200 truncate max-w-[180px]">
-                  {ipData.city}, {ipData.region}
+                  {[ipData.city, ipData.region].filter(Boolean).join(', ') || 'Unknown'}
                 </span>
               </div>
               <div className="flex justify-between items-center pt-1.5">
@@ -254,15 +268,19 @@ export const MyIpTool: React.FC = () => {
               </div>
               <div className="flex justify-between items-center pt-1.5">
                 <span className="text-slate-500">Coordinates</span>
-                <a
-                  href={`https://www.google.com/maps?q=${ipData.lat},${ipData.lon}`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="font-mono text-blue-600 dark:text-blue-400 hover:underline flex items-center gap-1 tabular-nums"
-                >
-                  <span>{ipData.lat}, {ipData.lon}</span>
-                  <ExternalLink className="w-3 h-3 shrink-0" />
-                </a>
+                {ipData.lat !== 0 || ipData.lon !== 0 ? (
+                  <a
+                    href={`https://www.google.com/maps?q=${ipData.lat},${ipData.lon}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="font-mono text-blue-600 dark:text-blue-400 hover:underline flex items-center gap-1 tabular-nums"
+                  >
+                    <span>{ipData.lat}, {ipData.lon}</span>
+                    <ExternalLink className="w-3 h-3 shrink-0" />
+                  </a>
+                ) : (
+                  <span className="font-mono text-slate-500">N/A</span>
+                )}
               </div>
             </div>
           </div>

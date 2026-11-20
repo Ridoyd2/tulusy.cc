@@ -1,4 +1,3 @@
-import os
 import sys
 from pathlib import Path
 from PIL import Image, ImageDraw
@@ -243,6 +242,150 @@ def run_tests():
     assert "html" not in doc_exts
     assert img_exts["psd"].get("input_only") is True
     print("[PASS] /api/formats registry aligned with converter handlers")
+
+    # 15. Verify genuine AVIF magic bytes (not HEIC fallback)
+    avif_out = test_dir / "genuine.avif"
+    convert_single_image(sample_png, avif_out, "avif", quality=80)
+    avif_header = avif_out.read_bytes()[:32]
+    assert b"ftypavif" in avif_header or b"ftypavis" in avif_header, f"Expected genuine AVIF magic, got {avif_header!r}"
+    assert b"ftypheic" not in avif_header, f"AVIF fell back to HEIC: {avif_header!r}"
+    print("[PASS] AVIF output contains genuine ftypavif header")
+
+    # 16. Verify path traversal in target_format/format is blocked with HTTP 400
+    with open(sample_png, "rb") as fp:
+        bad_img_resp = client.post(
+            "/api/convert/image",
+            files={"file": ("sample.png", fp, "image/png")},
+            data={"target_format": "../evil.png"},
+        )
+    assert bad_img_resp.status_code == 400, f"Expected 400 for path traversal format, got {bad_img_resp.status_code}"
+
+    with open(merged_pdf, "rb") as fp:
+        bad_pdf_resp = client.post(
+            "/api/convert/pdf-to-images",
+            files={"file": ("merged.pdf", fp, "application/pdf")},
+            data={"format": "../../pwn"},
+        )
+    assert bad_pdf_resp.status_code == 400, f"Expected 400 for pdf-to-images traversal, got {bad_pdf_resp.status_code}"
+
+    with open(sample_png, "rb") as fp:
+        bad_uni_resp = client.post(
+            "/api/convert/universal",
+            files={"file": ("sample.png", fp, "image/png")},
+            data={"target_format": "psd"},
+        )
+    assert bad_uni_resp.status_code == 400, f"Expected 400 for psd target, got {bad_uni_resp.status_code}"
+    print("[PASS] Path traversal and read-only target formats blocked with HTTP 400")
+
+    # 17. Verify SVG <image href=local_file> does NOT read local filesystem files
+    secret_local = test_dir / "secret_local.png"
+    Image.new("RGB", (40, 40), (220, 20, 60)).save(str(secret_local))
+    evil_svg = test_dir / "evil_lfi.svg"
+    evil_svg.write_text(
+        f'<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="100" height="100">'
+        f'<rect width="100" height="100" fill="#00ff00"/>'
+        f'<image x="0" y="0" width="40" height="40" xlink:href="secret_local.png"/>'
+        f'</svg>',
+        encoding="utf-8",
+    )
+    svg_out = test_dir / "svg_lfi_check.png"
+    convert_single_image(evil_svg, svg_out, "png")
+    with Image.open(str(svg_out)) as check_img:
+        px = check_img.convert("RGB").getpixel((10, 10))
+        assert px[1] > 200 and px[0] < 30, f"SVG loaded local secret image pixel={px}"
+    print("[PASS] SVG local filesystem href resolution blocked")
+
+    # 18. Verify multi-page PDF -> CSV preserves all pages (not just Page 1)
+    multi_pdf = test_dir / "multipage_tables.pdf"
+    mp_doc = fitz.open()
+    p1 = mp_doc.new_page()
+    p1.insert_text((40, 60), "PageOneMarker")
+    p2 = mp_doc.new_page()
+    p2.insert_text((40, 60), "PageTwoMarker")
+    mp_doc.save(str(multi_pdf))
+    mp_doc.close()
+
+    multi_csv = test_dir / "multipage_out.csv"
+    convert_pdf_to_csv(multi_pdf, multi_csv)
+    csv_text = multi_csv.read_text(encoding="utf-8")
+    assert "PageOneMarker" in csv_text and "PageTwoMarker" in csv_text, f"Multi-page PDF->CSV lost page 2: {csv_text!r}"
+    print("[PASS] Multi-page PDF -> CSV preserves all pages")
+
+    # 19. Verify CSV with Unicode superscripts, UTF-8 BOM, and XML control chars converts cleanly
+    tricky_csv = test_dir / "tricky.csv"
+    tricky_csv.write_bytes(b"\xef\xbb\xbfLabel,Val\nArea,m\xc2\xb2\nCtrl,ok\x07text\n")
+    tricky_xlsx = test_dir / "tricky.xlsx"
+    convert_csv_to_xlsx(tricky_csv, tricky_xlsx)
+    wb2 = openpyxl.load_workbook(str(tricky_xlsx), data_only=True)
+    ws2 = wb2.active
+    assert ws2["A1"].value == "Label"
+    assert ws2["B2"].value == "m²"
+    assert ws2["B3"].value == "oktext"
+    wb2.close()
+    print("[PASS] CSV -> XLSX handles UTF-8 BOM, Unicode digits, and control chars cleanly")
+
+    # 20. Verify batch image converter deduplicates same-stem files (a.png + a.jpg -> 2 files in ZIP)
+    import io, zipfile
+    same_a = test_dir / "dup.png"
+    same_b = test_dir / "dup.jpg"
+    Image.new("RGB", (20, 20), (10, 20, 30)).save(str(same_a))
+    Image.new("RGB", (20, 20), (40, 50, 60)).save(str(same_b))
+    with open(same_a, "rb") as f1, open(same_b, "rb") as f2:
+        batch_resp = client.post(
+            "/api/convert/image/batch",
+            files=[("files", ("dup.png", f1, "image/png")), ("files", ("dup.jpg", f2, "image/jpeg"))],
+            data={"target_format": "webp"},
+        )
+    assert batch_resp.status_code == 200
+    with zipfile.ZipFile(io.BytesIO(batch_resp.content)) as zf:
+        assert len(zf.namelist()) == 2, f"Expected 2 files in batch ZIP, got {zf.namelist()}"
+    print("[PASS] Batch image converter preserves all files sharing a filename stem")
+
+    # 21. Verify legacy .doc returns HTTP 400 instead of 500
+    legacy_resp = client.post(
+        "/api/convert/universal",
+        files={"file": ("old.doc", b"fake binary doc", "application/msword")},
+        data={"target_format": "pdf"},
+    )
+    assert legacy_resp.status_code == 400, f"Expected 400 for legacy .doc, got {legacy_resp.status_code}"
+    print("[PASS] Legacy .doc rejected cleanly with HTTP 400")
+
+    # 22. Verify PDF -> PPTX keeps editable text without double-rendering glyphs in backdrop
+    from pptx import Presentation
+    pptx_src = test_dir / "pptx_text_src.pdf"
+    pdoc = fitz.open()
+    pg = pdoc.new_page(width=400, height=200)
+    pg.draw_rect(fitz.Rect(0, 0, 400, 200), fill=(0.95, 0.95, 1.0))
+    pg.insert_text((40, 100), "Clean Slide Text", fontsize=18)
+    pdoc.save(str(pptx_src))
+    pdoc.close()
+    pptx_clean_out = test_dir / "pptx_clean.pptx"
+    convert_pdf_to_pptx(pptx_src, pptx_clean_out, extract_text=True)
+    prs_check = Presentation(str(pptx_clean_out))
+    slide_shapes = prs_check.slides[0].shapes
+    text_found = any(getattr(s, "has_text_frame", False) and "Clean Slide Text" in s.text_frame.text for s in slide_shapes)
+    assert text_found, "Expected editable text frame in generated PPTX"
+    print("[PASS] PDF -> PPTX extracts styled editable text cleanly")
+
+    # 23. Verify PDF -> CSV with blank Page 1 & content on Page 2 emits no leading blank row
+    blank_p1_pdf = test_dir / "blank_p1.pdf"
+    bp_doc = fitz.open()
+    bp_doc.new_page()  # empty Page 1
+    bp_p2 = bp_doc.new_page()
+    bp_p2.insert_text((40, 60), "OnlyPageTwo")
+    bp_doc.save(str(blank_p1_pdf))
+    bp_doc.close()
+
+    blank_p1_csv = test_dir / "blank_p1.csv"
+    convert_pdf_to_csv(blank_p1_pdf, blank_p1_csv)
+    lines = blank_p1_csv.read_text(encoding="utf-8").splitlines()
+    assert lines and lines[0] == "OnlyPageTwo", f"Expected no leading blank line/header, got {lines!r}"
+
+    # 24. Verify validate_image_params(quality=0, dpi=0) clamps to (1, 72) rather than reverting to defaults
+    from app.services.utils import validate_image_params
+    _, _, q_clamped, d_clamped = validate_image_params(quality=0, dpi=0)
+    assert (q_clamped, d_clamped) == (1, 72), f"Expected (1, 72), got {(q_clamped, d_clamped)}"
+    print("[PASS] PDF -> CSV leading blank suppression & image zero-param clamping verified")
 
     print("\n[SUCCESS] ALL BACKEND CONVERSION TESTS PASSED PERFECTLY!")
 

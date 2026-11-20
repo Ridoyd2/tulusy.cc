@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { cache } from 'react';
 import { Metadata } from 'next';
 import { FileDownloadClient } from './FileDownloadClient';
 import { SITE_URL } from '@/lib/site';
@@ -7,10 +7,10 @@ interface PageProps {
   params: Promise<{ id: string }>;
 }
 
-async function getFileInfo(id: string) {
+const getFileInfo = cache(async (id: string) => {
   try {
-    const apiUrl = process.env.BACKEND_URL || process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8480';
-    const resp = await fetch(`${apiUrl}/api/hosting/info/${id}`, {
+    const apiUrl = (process.env.BACKEND_URL || process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8480').replace(/\/+$/, '');
+    const resp = await fetch(`${apiUrl}/api/hosting/info/${encodeURIComponent(id)}`, {
       cache: 'no-store',
     });
     if (!resp.ok) return null;
@@ -19,7 +19,7 @@ async function getFileInfo(id: string) {
   } catch {
     return null;
   }
-}
+});
 
 export async function generateMetadata({ params }: PageProps): Promise<Metadata> {
   const { id } = await params;
@@ -45,7 +45,8 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
       title: socialTitle,
       description: desc,
       type: 'website',
-      url: `${SITE_URL}/f/${id}`,
+      locale: 'en_US',
+      url: `${SITE_URL}/f/${encodeURIComponent(id)}`,
       siteName: 'Tulusy File Share',
     },
     twitter: {

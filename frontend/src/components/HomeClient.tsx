@@ -14,6 +14,7 @@ import { QuickTools } from './QuickTools';
 import { FeatureGrid } from './FeatureGrid';
 import { Footer } from './Footer';
 import { useConversionQueue } from '../hooks/useConversionQueue';
+import { normalizeFormatExt } from '../lib/formatRegistry';
 import { ActiveTool, DEDICATED_TOOL_IDS, TOOL_ROUTES, getToolHref } from '@/lib/toolsConfig';
 
 const LEGACY_TOOL_PARAMS: ActiveTool[] = ['file-host', 'load-tester', 'my-ip', 'da-checker'];
@@ -33,7 +34,7 @@ export const HomeClient: React.FC = () => {
   const [heroPickerMode, setHeroPickerMode] = useState<'source' | 'target' | null>(null);
 
   const {
-    files, setFiles, isConvertingAny, activePreset, setActivePreset,
+    files, isConvertingAny, activePreset, setActivePreset,
     activeFormatFileId, setActiveFormatFileId, activeSettingsFileId, setActiveSettingsFileId,
     isBatchSettingsOpen, setIsBatchSettingsOpen, isBatchFormatOpen, setIsBatchFormatOpen,
     isGlobalDragging, setIsGlobalDragging, handleFilesAdded, handleSelectFormat, handleSelectAllFormat, handleSaveSettings,
@@ -45,29 +46,23 @@ export const HomeClient: React.FC = () => {
   } = useConversionQueue(true);
 
   const handlePresetTrigger = (target: string, label: string, accept?: string, source?: string) => {
+    const cleanTarget = normalizeFormatExt(target);
     if (source) {
-      setHeroSourceFormat(source.toLowerCase());
+      setHeroSourceFormat(normalizeFormatExt(source));
     }
-    setHeroTargetFormat(target.toLowerCase());
     if (files.length > 0) {
-      setFiles(prev =>
-        prev.map(f => ({
-          ...f,
-          targetFormat: target,
-          status: 'idle',
-          progress: 0,
-          resultBlob: undefined,
-          resultFileName: undefined,
-          errorMessage: undefined,
-        }))
-      );
+      handleSelectAllFormat(cleanTarget);
     } else {
-      setActivePreset({ target, label, accept });
+      setHeroTargetFormat(cleanTarget);
+      setActivePreset({ target: cleanTarget, label, accept });
       setTimeout(() => {
         dropzoneRef.current?.openPicker();
       }, 50);
     }
   };
+
+  const uniqueBatchSources = new Set(files.map(f => normalizeFormatExt(f.sourceExt)));
+  const batchSourceExt = uniqueBatchSources.size === 1 ? Array.from(uniqueBatchSources)[0] : undefined;
 
   return (
     <div className="min-h-screen flex flex-col relative">
@@ -126,8 +121,8 @@ export const HomeClient: React.FC = () => {
                 ref={dropzoneRef}
                 onFilesAdded={handleFilesAdded}
                 isCompact={files.length > 0}
-                acceptFilter={activePreset?.accept || `.${heroSourceFormat}`}
-                activePresetLabel={`${heroSourceFormat.toUpperCase()} → ${heroTargetFormat.toUpperCase()}`}
+                acceptFilter={activePreset?.accept}
+                activePresetLabel={activePreset?.label ?? null}
               />
             </div>
 
@@ -196,7 +191,7 @@ export const HomeClient: React.FC = () => {
           handleSelectAllFormat(fmt);
           setIsBatchFormatOpen(false);
         }}
-        sourceExt={undefined}
+        sourceExt={batchSourceExt}
         currentSelected={files[0]?.targetFormat || heroTargetFormat}
         mode="target"
       />

@@ -13,6 +13,62 @@ const nextConfig: NextConfig = {
       { source: "/convert/csv-to-xlsx", destination: "/convert/csv-to-excel", permanent: true },
     ];
   },
+  async headers() {
+    return [
+      {
+        source: "/(.*)",
+        headers: [
+          { key: "X-Content-Type-Options", value: "nosniff" },
+          { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
+          { key: "X-Frame-Options", value: "SAMEORIGIN" },
+          { key: "Permissions-Policy", value: "camera=(), microphone=(), geolocation=()" },
+        ],
+      },
+      {
+        source: "/f/:path*",
+        headers: [
+          { key: "X-Robots-Tag", value: "noindex, nofollow" },
+        ],
+      },
+      {
+        source: "/sitemap.xml",
+        headers: [
+          { key: "Content-Type", value: "application/xml; charset=utf-8" },
+          {
+            key: "Cache-Control",
+            value: "public, max-age=3600, s-maxage=86400, stale-while-revalidate=86400",
+          },
+          { key: "X-Robots-Tag", value: "noindex, follow" },
+        ],
+      },
+      {
+        source: "/sitemaps/:path*",
+        headers: [
+          { key: "Content-Type", value: "application/xml; charset=utf-8" },
+          {
+            key: "Cache-Control",
+            value: "public, max-age=3600, s-maxage=86400, stale-while-revalidate=86400",
+          },
+          { key: "X-Robots-Tag", value: "noindex, follow" },
+        ],
+      },
+      {
+        source: "/sitemap.xsl",
+        headers: [
+          { key: "Content-Type", value: "application/xslt+xml; charset=utf-8" },
+          { key: "Cache-Control", value: "public, max-age=86400" },
+          { key: "X-Robots-Tag", value: "noindex, nofollow" },
+        ],
+      },
+      {
+        source: "/robots.txt",
+        headers: [
+          { key: "Content-Type", value: "text/plain; charset=utf-8" },
+          { key: "Cache-Control", value: "public, max-age=3600" },
+        ],
+      },
+    ];
+  },
   async rewrites() {
     return [
       {

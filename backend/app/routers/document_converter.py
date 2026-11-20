@@ -2,9 +2,9 @@ import asyncio
 from fastapi import APIRouter, UploadFile, File, HTTPException, BackgroundTasks
 from fastapi.responses import FileResponse
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable
 
-from app.services.utils import create_task_dir, save_upload_file, cleanup_task_dir
+from app.services.utils import create_task_dir, save_upload_file, cleanup_task_dir, get_safe_stem
 from app.services.pdf_service import (
     convert_pdf_to_docx,
     convert_pdf_to_pptx,
@@ -21,14 +21,6 @@ from app.services.excel_service import (
 router = APIRouter(prefix="/api/convert/doc", tags=["Document Converter"])
 
 
-def get_safe_stem(filename: Optional[str], default_name: str = "converted_document") -> str:
-    if filename and filename.strip():
-        stem = Path(filename).stem
-        if stem:
-            return stem
-    return default_name
-
-
 async def _run_doc_conversion(
     background_tasks: BackgroundTasks,
     file: UploadFile,
@@ -42,13 +34,16 @@ async def _run_doc_conversion(
     task_id, upload_dir, output_dir = create_task_dir()
     try:
         input_path = await save_upload_file(file, upload_dir)
-        output_filename = f"{get_safe_stem(file.filename)}.{output_ext}"
+        output_filename = f"{get_safe_stem(file.filename, 'converted_document')}.{output_ext}"
         output_path = output_dir / output_filename
 
         await asyncio.to_thread(converter_fn, input_path, output_path, *converter_args)
         background_tasks.add_task(cleanup_task_dir, task_id)
 
         return FileResponse(path=str(output_path), filename=output_filename, media_type=media_type)
+    except HTTPException:
+        await cleanup_task_dir(task_id)
+        raise
     except ValueError as ve:
         await cleanup_task_dir(task_id)
         raise HTTPException(status_code=400, detail=str(ve))

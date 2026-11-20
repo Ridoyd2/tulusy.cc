@@ -40,7 +40,7 @@ export const QuickTools: React.FC<QuickToolsProps> = ({ onPresetSelected }) => {
       from: 'XLSX',
       to: 'PDF',
       icon: <FileSpreadsheet className="w-4 h-4 text-slate-700 dark:text-slate-300" />,
-      action: () => onPresetSelected('xlsx', 'pdf', '.xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'),
+      action: () => onPresetSelected('xlsx', 'pdf', '.xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'),
     },
     {
       title: 'PDF to Excel',

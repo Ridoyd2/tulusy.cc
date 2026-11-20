@@ -1,14 +1,17 @@
+import base64
 import io
-import os
 from pathlib import Path
 from typing import Optional, List, Tuple
-from PIL import Image, ImageOps
+from PIL import Image, ImageOps, UnidentifiedImageError, features
 import pillow_heif
-from app.config import MAX_PDF_PAGES
-from app.services.utils import validate_image_params
+from app.config import MAX_IMAGE_DIMENSION, MAX_IMAGE_FRAMES, MAX_PDF_PAGES, WRITABLE_IMAGE_FORMATS
+from app.services.utils import validate_image_params, validate_target_format
 
 # Register HEIF/HEIC opener with Pillow
 pillow_heif.register_heif_opener()
+
+# Keep Pillow decompression bomb guard active while allowing configured MAX_IMAGE_DIMENSION
+Image.MAX_IMAGE_PIXELS = max(89_478_485, MAX_IMAGE_DIMENSION * MAX_IMAGE_DIMENSION)
 
 try:
     from psd_tools import PSDImage
@@ -18,7 +21,7 @@ except ImportError:
 
 try:
     from svglib.svglib import svg2rlg
-    from reportlab.graphics import renderPM
+    from reportlab.graphics import renderPDF, renderPM
     HAS_SVGLIB = True
 except ImportError:
     HAS_SVGLIB = False
@@ -33,39 +36,76 @@ def load_image(input_path: Path) -> List[Image.Image]:
     Loads an image from any supported file format into a list of PIL Images (multi-frame for GIF/PDF/TIFF).
     """
     ext = input_path.suffix.lower().lstrip('.')
-    
-    # 1. Handle SVG files
-    if ext == 'svg' and HAS_SVGLIB:
+
+    # 1. Handle SVG files safely from memory stream (blocks local file xlink:href / XML entity resolution)
+    if ext == 'svg':
+        if not HAS_SVGLIB:
+            raise ValueError("SVG rasterization support is not installed on the server.")
         try:
-            drawing = svg2rlg(str(input_path))
-            if drawing:
-                # Render to high-res PNG in memory
-                buf = io.BytesIO()
-                renderPM.drawToFile(drawing, buf, fmt="PNG", dpi=300)
-                buf.seek(0)
-                return [Image.open(buf)]
+            svg_bytes = input_path.read_bytes()
+            if not svg_bytes.strip():
+                raise ValueError("SVG file is empty.")
+            drawing = svg2rlg(io.BytesIO(svg_bytes), resolve_entities=False)
+            if not drawing or drawing.width <= 0 or drawing.height <= 0:
+                raise ValueError("Invalid or empty SVG document.")
+
+            max_pt = max(float(drawing.width), float(drawing.height))
+            safe_dpi = max(1, int(min(300.0, (MAX_IMAGE_DIMENSION * 72.0) / max_pt))) if max_pt > 0 else 300
+
+            buf = io.BytesIO()
+            try:
+                try:
+                    renderPM.drawToFile(drawing, buf, fmt="PNG", dpi=safe_dpi)
+                    buf.seek(0)
+                    with Image.open(buf) as rendered:
+                        return [rendered.copy()]
+                except Exception:
+                    # Fallback when rlPyCairo/renderPM backend is unavailable (e.g., Windows)
+                    pdf_bytes = renderPDF.drawToString(drawing)
+                    svg_doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+                    try:
+                        pix = svg_doc[0].get_pixmap(dpi=safe_dpi, alpha=True)
+                        return [Image.frombytes("RGBA", [pix.width, pix.height], pix.samples)]
+                    finally:
+                        svg_doc.close()
+            finally:
+                buf.close()
+        except ValueError:
+            raise
         except Exception as e:
-            print(f"SVG load error via svglib: {e}")
+            raise ValueError(f"Could not render SVG image: {e}")
 
     # 2. Handle PSD files
-    if ext == 'psd' and HAS_PSD:
+    if ext == 'psd':
+        if not HAS_PSD:
+            raise ValueError("PSD format support is not installed on the server.")
         try:
             psd = PSDImage.open(str(input_path))
             pil_img = psd.composite()
-            if pil_img:
-                return [pil_img]
+            if not pil_img:
+                raise ValueError("PSD file has no composite image.")
+            return [pil_img]
+        except ValueError:
+            raise
         except Exception as e:
-            print(f"PSD load error via psd_tools: {e}")
+            raise ValueError(f"Could not decode PSD image: {e}")
 
     # 3. Handle PDF files as image input
     if ext == 'pdf':
-        doc = fitz.open(str(input_path))
         try:
+            doc = fitz.open(str(input_path))
+        except Exception as e:
+            raise ValueError(f"Invalid or corrupted PDF file: {e}")
+        try:
+            if doc.needs_pass:
+                raise ValueError("Password-protected PDFs are not supported.")
+            if len(doc) == 0:
+                raise ValueError("PDF document contains no pages.")
             if len(doc) > MAX_PDF_PAGES:
                 raise ValueError(f"PDF exceeds maximum supported page limit ({MAX_PDF_PAGES} pages).")
             frames = []
             for page in doc:
-                pix = page.get_pixmap(dpi=300)
+                pix = page.get_pixmap(dpi=300, alpha=False)
                 img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
                 frames.append(img)
             if frames:
@@ -74,10 +114,18 @@ def load_image(input_path: Path) -> List[Image.Image]:
             doc.close()
 
     # 4. Standard and HEIC/HEIF / TIFF / WebP / BMP / GIF etc. via Pillow
-    img = Image.open(str(input_path))
-    frames = []
     try:
-        is_animated = getattr(img, "is_animated", False) and getattr(img, "n_frames", 1) > 1
+        img = Image.open(str(input_path))
+    except (UnidentifiedImageError, Image.DecompressionBombError, OSError) as e:
+        raise ValueError(f"Could not decode image file '{input_path.name}': {e}")
+
+    frames: List[Image.Image] = []
+    try:
+        n_frames = getattr(img, "n_frames", 1)
+        if n_frames > MAX_IMAGE_FRAMES:
+            raise ValueError(f"Animated image exceeds maximum supported frame limit ({MAX_IMAGE_FRAMES} frames).")
+
+        is_animated = getattr(img, "is_animated", False) and n_frames > 1
         if not is_animated:
             try:
                 transposed = ImageOps.exif_transpose(img)
@@ -89,13 +137,26 @@ def load_image(input_path: Path) -> List[Image.Image]:
         else:
             try:
                 while True:
+                    if len(frames) >= MAX_IMAGE_FRAMES:
+                        raise ValueError(f"Animated image exceeds maximum supported frame limit ({MAX_IMAGE_FRAMES} frames).")
                     frames.append(img.copy())
                     img.seek(img.tell() + 1)
-            except (EOFError, ValueError, AttributeError, OSError):
-                pass  # End of frame sequence or non-seekable image
+            except EOFError:
+                pass
+            except (ValueError, AttributeError, OSError) as exc:
+                if isinstance(exc, ValueError) and "maximum supported frame limit" in str(exc):
+                    raise
+                pass  # Non-seekable image or end of sequence
 
         if not frames:
             frames = [img.copy()]
+    except Exception:
+        for f in frames:
+            try:
+                f.close()
+            except Exception:
+                pass
+        raise
     finally:
         try:
             img.close()
@@ -120,6 +181,17 @@ def _composite_to_rgb(img: Image.Image, bg_color: Optional[str] = "#FFFFFF") -> 
     if img.mode != "RGB":
         return img.convert("RGB")
     return img.copy()
+
+
+def _normalize_mode_for_resize(img: Image.Image) -> Image.Image:
+    """Normalizes exotic modes (CMYK, P, 1, I;16, F, etc.) to RGB/RGBA/L/LA before resizing or export."""
+    if img.mode in ("RGB", "RGBA", "L", "LA"):
+        return img
+    if img.mode == "P":
+        return img.convert("RGBA" if "transparency" in img.info else "RGB")
+    if img.mode in ("PA", "RGBa"):
+        return img.convert("RGBA")
+    return img.convert("RGB")
 
 
 def apply_image_transformations(
@@ -152,9 +224,17 @@ def apply_image_transformations(
 
         target_w = max(1, target_w)
         target_h = max(1, target_h)
-        if img.mode == "P":
-            img = img.convert("RGBA" if "transparency" in img.info else "RGB")
-        img = img.resize((target_w, target_h), Image.Resampling.LANCZOS)
+        if target_w > MAX_IMAGE_DIMENSION or target_h > MAX_IMAGE_DIMENSION:
+            img.close()
+            raise ValueError(f"Resulting dimensions ({target_w}x{target_h}) exceed maximum supported size ({MAX_IMAGE_DIMENSION}px).")
+
+        normalized = _normalize_mode_for_resize(img)
+        if normalized is not img:
+            img.close()
+            img = normalized
+        resized = img.resize((target_w, target_h), Image.Resampling.LANCZOS)
+        img.close()
+        img = resized
 
     # Grayscale conversion (preserve alpha channel if transparent so backgrounds don't turn black)
     if grayscale:
@@ -162,10 +242,18 @@ def apply_image_transformations(
             rgba = img.convert("RGBA")
             alpha = rgba.split()[-1]
             lum = ImageOps.grayscale(rgba.convert("RGB"))
-            img = Image.merge("LA", (lum, alpha))
+            merged = Image.merge("LA", (lum, alpha))
             rgba.close()
+            lum.close()
+            img.close()
+            img = merged
         else:
-            img = ImageOps.grayscale(img)
+            norm = _normalize_mode_for_resize(img)
+            gray = ImageOps.grayscale(norm)
+            if norm is not img:
+                norm.close()
+            img.close()
+            img = gray
 
     return img
 
@@ -187,7 +275,7 @@ def convert_single_image(
     Converts any input image to the designated target format with custom settings.
     """
     width, height, quality, dpi = validate_image_params(width, height, quality, dpi)
-    target_format = target_format.lower().lstrip('.')
+    target_format = validate_target_format(target_format, WRITABLE_IMAGE_FORMATS)
     frames = load_image(input_path)
 
     if not frames:
@@ -218,47 +306,72 @@ def convert_single_image(
                 rgb_img.close()
 
         elif target_format == "png":
-            if primary_img.mode not in ("RGB", "RGBA", "L", "LA"):
-                primary_img = primary_img.convert("RGBA")
-            primary_img.save(str(output_path), "PNG", optimize=True, dpi=(dpi, dpi))
+            png_img = _normalize_mode_for_resize(primary_img)
+            try:
+                png_img.save(str(output_path), "PNG", optimize=True, dpi=(dpi, dpi))
+            finally:
+                if png_img is not primary_img:
+                    png_img.close()
 
         elif target_format == "webp":
-            save_kwargs = {"quality": quality, "method": 4}
-            if len(processed_frames) > 1:
-                primary_img.save(
-                    str(output_path),
-                    "WEBP",
-                    save_all=True,
-                    append_images=processed_frames[1:],
-                    duration=frames[0].info.get("duration", 100),
-                    loop=frames[0].info.get("loop", 0),
-                    **save_kwargs
-                )
-            else:
-                primary_img.save(str(output_path), "WEBP", **save_kwargs)
+            webp_frames = [_normalize_mode_for_resize(f) for f in processed_frames]
+            try:
+                save_kwargs = {"quality": quality, "method": 4}
+                if len(webp_frames) > 1:
+                    raw_duration = frames[0].info.get("duration", 100)
+                    duration = raw_duration if isinstance(raw_duration, (int, list, tuple)) and raw_duration else 100
+                    webp_frames[0].save(
+                        str(output_path),
+                        "WEBP",
+                        save_all=True,
+                        append_images=webp_frames[1:],
+                        duration=duration,
+                        loop=frames[0].info.get("loop", 0),
+                        **save_kwargs
+                    )
+                else:
+                    webp_frames[0].save(str(output_path), "WEBP", **save_kwargs)
+            finally:
+                for orig, norm in zip(processed_frames, webp_frames):
+                    if norm is not orig:
+                        norm.close()
 
         elif target_format == "avif":
+            if not features.check("avif"):
+                raise RuntimeError("AVIF encoding requires Pillow >= 11.3 with libavif support.")
             export_img = primary_img
             if export_img.mode not in ("RGB", "RGBA"):
                 export_img = export_img.convert("RGBA" if export_img.mode in ("LA", "P") else "RGB")
             try:
                 export_img.save(str(output_path), "AVIF", quality=quality)
-            except Exception:
-                heif_file = pillow_heif.from_pillow(export_img)
-                heif_file.save(str(output_path), quality=quality, enc_format="AVIF")
+            finally:
+                if export_img is not primary_img:
+                    export_img.close()
 
         elif target_format in ["heic", "heif"]:
             export_img = primary_img
             if export_img.mode not in ("RGB", "RGBA"):
                 export_img = export_img.convert("RGBA" if export_img.mode in ("LA", "P") else "RGB")
-            heif_file = pillow_heif.from_pillow(export_img)
-            heif_file.save(str(output_path), quality=quality, enc_format="HEIC")
+            try:
+                heif_file = pillow_heif.from_pillow(export_img)
+                heif_file.save(str(output_path), quality=quality, format="HEIF")
+            finally:
+                if export_img is not primary_img:
+                    export_img.close()
 
         elif target_format == "ico":
             if not ico_sizes:
                 ico_sizes = [(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)]
             ico_img = primary_img.convert("RGBA") if primary_img.mode != "RGBA" else primary_img
-            ico_img.save(str(output_path), format="ICO", sizes=ico_sizes)
+            try:
+                max_dim = max(ico_img.width, ico_img.height)
+                filtered_sizes = [s for s in ico_sizes if s[0] <= max_dim and s[1] <= max_dim]
+                if not filtered_sizes:
+                    filtered_sizes = [(min(256, ico_img.width), min(256, ico_img.height))]
+                ico_img.save(str(output_path), format="ICO", sizes=filtered_sizes)
+            finally:
+                if ico_img is not primary_img:
+                    ico_img.close()
 
         elif target_format == "bmp":
             rgb_img = _composite_to_rgb(primary_img, bg_color)
@@ -268,31 +381,45 @@ def convert_single_image(
                 rgb_img.close()
 
         elif target_format in ["tiff", "tif"]:
-            if len(processed_frames) > 1:
-                primary_img.save(
-                    str(output_path),
-                    "TIFF",
-                    save_all=True,
-                    append_images=processed_frames[1:],
-                    dpi=(dpi, dpi),
-                    compression="tiff_deflate"
-                )
-            else:
-                primary_img.save(str(output_path), "TIFF", dpi=(dpi, dpi), compression="tiff_deflate")
+            tiff_frames = [_normalize_mode_for_resize(f) for f in processed_frames]
+            try:
+                if len(tiff_frames) > 1:
+                    tiff_frames[0].save(
+                        str(output_path),
+                        "TIFF",
+                        save_all=True,
+                        append_images=tiff_frames[1:],
+                        dpi=(dpi, dpi),
+                        compression="tiff_deflate"
+                    )
+                else:
+                    tiff_frames[0].save(str(output_path), "TIFF", dpi=(dpi, dpi), compression="tiff_deflate")
+            finally:
+                for orig, norm in zip(processed_frames, tiff_frames):
+                    if norm is not orig:
+                        norm.close()
 
         elif target_format == "gif":
-            if len(processed_frames) > 1:
-                primary_img.save(
-                    str(output_path),
-                    "GIF",
-                    save_all=True,
-                    append_images=processed_frames[1:],
-                    duration=frames[0].info.get("duration", 100),
-                    loop=frames[0].info.get("loop", 0),
-                    optimize=True
-                )
-            else:
-                primary_img.save(str(output_path), "GIF")
+            gif_frames = [_normalize_mode_for_resize(f) for f in processed_frames]
+            try:
+                if len(gif_frames) > 1:
+                    raw_duration = frames[0].info.get("duration", 100)
+                    duration = raw_duration if isinstance(raw_duration, (int, list, tuple)) and raw_duration else 100
+                    gif_frames[0].save(
+                        str(output_path),
+                        "GIF",
+                        save_all=True,
+                        append_images=gif_frames[1:],
+                        duration=duration,
+                        loop=frames[0].info.get("loop", 0),
+                        optimize=True
+                    )
+                else:
+                    gif_frames[0].save(str(output_path), "GIF")
+            finally:
+                for orig, norm in zip(processed_frames, gif_frames):
+                    if norm is not orig:
+                        norm.close()
 
         elif target_format == "pdf":
             rgb_frames = [_composite_to_rgb(f, bg_color) for f in processed_frames]
@@ -306,25 +433,30 @@ def convert_single_image(
                     rf.close()
 
         elif target_format == "svg":
-            import base64
-            buf = io.BytesIO()
-            primary_img.save(buf, format="PNG")
-            b64_data = base64.b64encode(buf.getvalue()).decode('ascii')
-            w, h = primary_img.size
-            svg_content = f'''<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="{w}" height="{h}" viewBox="0 0 {w} {h}">
+            svg_img = _normalize_mode_for_resize(primary_img)
+            try:
+                buf = io.BytesIO()
+                svg_img.save(buf, format="PNG")
+                b64_data = base64.b64encode(buf.getvalue()).decode('ascii')
+                w, h = svg_img.size
+                svg_content = f'''<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="{w}" height="{h}" viewBox="0 0 {w} {h}">
   <image width="{w}" height="{h}" xlink:href="data:image/png;base64,{b64_data}"/>
 </svg>'''
-            with open(output_path, "w", encoding="utf-8") as f:
-                f.write(svg_content)
+                with open(output_path, "w", encoding="utf-8") as f:
+                    f.write(svg_content)
+            finally:
+                if svg_img is not primary_img:
+                    svg_img.close()
 
         elif target_format == "tga":
             tga_img = primary_img
             if tga_img.mode not in ("RGB", "RGBA", "L"):
                 tga_img = tga_img.convert("RGBA" if tga_img.mode in ("LA", "P") else "RGB")
-            tga_img.save(str(output_path), "TGA")
-
-        else:
-            primary_img.save(str(output_path), format=target_format.upper())
+            try:
+                tga_img.save(str(output_path), "TGA")
+            finally:
+                if tga_img is not primary_img:
+                    tga_img.close()
     finally:
         for f in frames:
             try:

@@ -1,10 +1,18 @@
 import asyncio
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, BackgroundTasks
 from fastapi.responses import FileResponse
-from pathlib import Path
 from typing import List, Optional
 
-from app.services.utils import create_task_dir, save_upload_file, cleanup_task_dir, create_zip_archive
+from app.config import LEGACY_UNSUPPORTED_DOC_FORMATS, WRITABLE_IMAGE_FORMATS
+from app.services.utils import (
+    IMAGE_MEDIA_TYPES,
+    cleanup_task_dir,
+    create_task_dir,
+    create_zip_archive,
+    get_safe_stem,
+    save_upload_file,
+    validate_target_format,
+)
 from app.services.pdf_service import (
     extract_pdf_pages_to_images,
     convert_images_to_pdf,
@@ -40,12 +48,13 @@ async def pdf_to_images_endpoint(
     """Extracts all pages from a PDF as images, returned as single image (if 1 page) or ZIP archive."""
     task_id, upload_dir, output_dir = create_task_dir()
     try:
+        target_img_fmt = validate_target_format(format, WRITABLE_IMAGE_FORMATS - {"pdf"})
         input_path = await save_upload_file(file, upload_dir)
         extracted = await asyncio.to_thread(
             extract_pdf_pages_to_images,
             pdf_path=input_path,
             output_dir=output_dir,
-            img_format=format,
+            img_format=target_img_fmt,
             dpi=dpi
         )
 
@@ -58,14 +67,15 @@ async def pdf_to_images_endpoint(
             return FileResponse(
                 path=str(extracted[0]),
                 filename=extracted[0].name,
-                media_type=f"image/{format}"
+                media_type=IMAGE_MEDIA_TYPES.get(target_img_fmt, "application/octet-stream")
             )
         else:
-            zip_path = output_dir / f"{input_path.stem}_pages.zip"
+            zip_stem = get_safe_stem(file.filename, "document")
+            zip_path = output_dir / f"{zip_stem}_pages.zip"
             await asyncio.to_thread(create_zip_archive, extracted, zip_path)
             return FileResponse(
                 path=str(zip_path),
-                filename=f"{input_path.stem}_pages.zip",
+                filename=f"{zip_stem}_pages.zip",
                 media_type="application/zip"
             )
     except HTTPException:
@@ -88,13 +98,15 @@ async def images_to_pdf_endpoint(
     """Merges multiple images into a single PDF document."""
     task_id, upload_dir, output_dir = create_task_dir()
     try:
+        if not files:
+            raise ValueError("No images provided to merge.")
         saved_paths = []
         for file in files:
             p = await save_upload_file(file, upload_dir)
             saved_paths.append(p)
 
-        safe_name = (output_name or "merged_document.pdf").replace("\\", "/").split("/")[-1]
-        out_pdf = output_dir / (safe_name if safe_name.endswith(".pdf") else f"{safe_name}.pdf")
+        safe_stem = get_safe_stem(output_name, "merged_document")
+        out_pdf = output_dir / f"{safe_stem}.pdf"
         await asyncio.to_thread(convert_images_to_pdf, saved_paths, out_pdf)
 
         background_tasks.add_task(cleanup_task_dir, task_id)
@@ -134,24 +146,31 @@ async def universal_convert_endpoint(
     """
     task_id, upload_dir, output_dir = create_task_dir()
     try:
+        all_known_targets = WRITABLE_IMAGE_FORMATS | {"docx", "pptx", "xlsx", "csv", "txt"}
+        target_fmt = validate_target_format(target_format, all_known_targets)
+
         input_path = await save_upload_file(file, upload_dir)
         source_ext = input_path.suffix.lower().lstrip(".")
-        target_fmt = target_format.lower().lstrip(".")
-        stem = Path(file.filename).stem if (file.filename and file.filename.strip()) else "converted_file"
-        if not stem:
-            stem = "converted_file"
+        stem = get_safe_stem(file.filename, "converted_file")
+
+        if source_ext in LEGACY_UNSUPPORTED_DOC_FORMATS:
+            raise ValueError(
+                f"Legacy binary .{source_ext} files are not supported. Please re-save as .{source_ext}x and try again."
+            )
 
         # 1. PDF Source Routes
         if source_ext == "pdf":
-            if target_fmt in ["docx", "doc"]:
+            if target_fmt == "pdf":
+                raise ValueError("Source file is already a PDF.")
+            if target_fmt == "docx":
                 out_file = output_dir / f"{stem}.docx"
                 await asyncio.to_thread(convert_pdf_to_docx, input_path, out_file)
                 media_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-            elif target_fmt in ["pptx", "ppt"]:
+            elif target_fmt == "pptx":
                 out_file = output_dir / f"{stem}.pptx"
                 await asyncio.to_thread(convert_pdf_to_pptx, input_path, out_file)
                 media_type = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
-            elif target_fmt in ["xlsx", "xls"]:
+            elif target_fmt == "xlsx":
                 out_file = output_dir / f"{stem}.xlsx"
                 await asyncio.to_thread(convert_pdf_to_xlsx, input_path, out_file)
                 media_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -163,22 +182,24 @@ async def universal_convert_endpoint(
                 out_file = output_dir / f"{stem}.txt"
                 await asyncio.to_thread(convert_pdf_to_txt, input_path, out_file)
                 media_type = "text/plain"
-            else:
+            elif target_fmt in (WRITABLE_IMAGE_FORMATS - {"pdf"}):
                 extracted = await asyncio.to_thread(
-                    extract_pdf_pages_to_images, input_path, output_dir, img_format=target_fmt, dpi=dpi or 300
+                    extract_pdf_pages_to_images, input_path, output_dir, img_format=target_fmt, dpi=dpi if dpi is not None else 300
                 )
                 if not extracted:
                     raise ValueError("No pages found in PDF")
                 if len(extracted) == 1:
                     out_file = extracted[0]
-                    media_type = f"image/{target_fmt}"
+                    media_type = IMAGE_MEDIA_TYPES.get(target_fmt, "application/octet-stream")
                 else:
                     out_file = output_dir / f"{stem}_pages.zip"
                     await asyncio.to_thread(create_zip_archive, extracted, out_file)
                     media_type = "application/zip"
+            else:
+                raise ValueError(f"Unsupported conversion from .pdf to .{target_fmt}")
 
-        # 2. Spreadsheets (XLSX / XLS / CSV)
-        elif source_ext in ["xlsx", "xls"]:
+        # 2. Spreadsheets (XLSX / CSV)
+        elif source_ext == "xlsx":
             if target_fmt == "pdf":
                 out_file = output_dir / f"{stem}.pdf"
                 await asyncio.to_thread(convert_xlsx_to_pdf, input_path, out_file)
@@ -191,7 +212,7 @@ async def universal_convert_endpoint(
                 raise ValueError(f"Unsupported conversion from .{source_ext} to .{target_fmt}")
 
         elif source_ext == "csv":
-            if target_fmt in ["xlsx", "xls"]:
+            if target_fmt == "xlsx":
                 out_file = output_dir / f"{stem}.xlsx"
                 await asyncio.to_thread(convert_csv_to_xlsx, input_path, out_file)
                 media_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -203,7 +224,7 @@ async def universal_convert_endpoint(
                 raise ValueError(f"Unsupported conversion from .csv to .{target_fmt}")
 
         # 3. Word / PowerPoint / Text Documents
-        elif source_ext in ["docx", "doc"]:
+        elif source_ext == "docx":
             if target_fmt == "pdf":
                 out_file = output_dir / f"{stem}.pdf"
                 await asyncio.to_thread(convert_docx_to_pdf, input_path, out_file)
@@ -215,7 +236,7 @@ async def universal_convert_endpoint(
             else:
                 raise ValueError(f"Unsupported conversion from .{source_ext} to .{target_fmt}")
 
-        elif source_ext in ["pptx", "ppt"]:
+        elif source_ext == "pptx":
             if target_fmt == "pdf":
                 out_file = output_dir / f"{stem}.pdf"
                 await asyncio.to_thread(convert_pptx_to_pdf, input_path, out_file)
@@ -237,34 +258,23 @@ async def universal_convert_endpoint(
 
         # 4. Image to Any Image / PDF / Vector / Icon
         else:
+            if target_fmt not in WRITABLE_IMAGE_FORMATS:
+                raise ValueError(f"Unsupported image target format: .{target_fmt}")
             out_file = output_dir / f"{stem}.{target_fmt}"
             await asyncio.to_thread(
                 convert_single_image,
                 input_path=input_path,
                 output_path=out_file,
                 target_format=target_fmt,
-                quality=quality or 90,
+                quality=quality if quality is not None else 90,
                 width=width,
                 height=height,
                 maintain_aspect_ratio=maintain_aspect_ratio if maintain_aspect_ratio is not None else True,
-                dpi=dpi or 300,
+                dpi=dpi if dpi is not None else 300,
                 grayscale=grayscale or False,
                 bg_color=bg_color or "#FFFFFF"
             )
-            media_map = {
-                "jpg": "image/jpeg",
-                "jpeg": "image/jpeg",
-                "png": "image/png",
-                "webp": "image/webp",
-                "avif": "image/avif",
-                "svg": "image/svg+xml",
-                "ico": "image/x-icon",
-                "gif": "image/gif",
-                "bmp": "image/bmp",
-                "tiff": "image/tiff",
-                "pdf": "application/pdf",
-            }
-            media_type = media_map.get(target_fmt, "application/octet-stream")
+            media_type = IMAGE_MEDIA_TYPES.get(target_fmt, "application/octet-stream")
 
         background_tasks.add_task(cleanup_task_dir, task_id)
 
@@ -273,6 +283,9 @@ async def universal_convert_endpoint(
             filename=out_file.name,
             media_type=media_type
         )
+    except HTTPException:
+        await cleanup_task_dir(task_id)
+        raise
     except ValueError as ve:
         await cleanup_task_dir(task_id)
         raise HTTPException(status_code=400, detail=str(ve))

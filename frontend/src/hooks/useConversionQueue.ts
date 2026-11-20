@@ -1,7 +1,19 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { FileItem, ConversionSettings } from '../types';
-import { DEFAULT_TARGET_FORMATS, getCompatibleTargets, ALL_FORMATS } from '../lib/formatRegistry';
+import { DEFAULT_TARGET_FORMATS, getCompatibleTargets, ALL_FORMATS, normalizeFormatExt } from '../lib/formatRegistry';
 import { convertSingleFile, mergeImagesToPdf, downloadBlob } from '../lib/api';
+
+const BROWSER_PREVIEWABLE_IMAGE_EXTS = new Set([
+  'png',
+  'jpg',
+  'jpeg',
+  'webp',
+  'avif',
+  'bmp',
+  'gif',
+  'ico',
+  'svg',
+]);
 
 export const DEFAULT_CONVERSION_SETTINGS: ConversionSettings = {
   quality: 90,
@@ -60,9 +72,16 @@ export function useConversionQueue(
   const [isBatchFormatOpen, setIsBatchFormatOpen] = useState(false);
   const [isGlobalDragging, setIsGlobalDragging] = useState(false);
   const dragCounterRef = useRef(0);
+  const itemGenerationRef = useRef<Map<string, number>>(new Map());
+  const inFlightConversionsRef = useRef<Map<string, number>>(new Map());
+  const batchRunningRef = useRef(false);
+
+  const bumpItemGeneration = useCallback((id: string) => {
+    itemGenerationRef.current.set(id, (itemGenerationRef.current.get(id) ?? 0) + 1);
+  }, []);
 
   const handleSelectHeroSource = useCallback((newSource: string) => {
-    const cleanSrc = newSource.toLowerCase().replace('.', '');
+    const cleanSrc = normalizeFormatExt(newSource);
     setHeroSourceFormat(cleanSrc);
     setActivePreset(null);
     const compatible = getCompatibleTargets(cleanSrc);
@@ -74,19 +93,20 @@ export function useConversionQueue(
   }, [heroTargetFormat]);
 
   const handleSelectHeroTarget = useCallback((newTarget: string) => {
-    const cleanTgt = newTarget.toLowerCase().replace('.', '');
+    const cleanTgt = normalizeFormatExt(newTarget);
     setHeroTargetFormat(cleanTgt);
     setActivePreset(null);
     setFiles(prev =>
       prev.map(item => {
         const compatible = getCompatibleTargets(item.sourceExt);
         if (item.status === 'idle' && compatible.some(f => f.ext === cleanTgt)) {
+          bumpItemGeneration(item.id);
           return { ...item, targetFormat: cleanTgt };
         }
         return item;
       })
     );
-  }, []);
+  }, [bumpItemGeneration]);
 
   const handleSwapHeroFormats = useCallback(() => {
     const compatible = getCompatibleTargets(heroTargetFormat);
@@ -100,26 +120,41 @@ export function useConversionQueue(
       prev.map(item => {
         const itemCompat = getCompatibleTargets(item.sourceExt);
         if (item.status === 'idle' && itemCompat.some(f => f.ext === nextTarget)) {
+          bumpItemGeneration(item.id);
           return { ...item, targetFormat: nextTarget };
         }
         return item;
       })
     );
-  }, [heroSourceFormat, heroTargetFormat]);
+  }, [heroSourceFormat, heroTargetFormat, bumpItemGeneration]);
 
   const handleFilesAdded = useCallback((newFiles: File[]) => {
     const newItems: FileItem[] = newFiles.map(file => {
       const dotIdx = file.name.lastIndexOf('.');
       const ext = dotIdx > 0 ? file.name.substring(dotIdx + 1).toLowerCase() : '';
-      const isImg = file.type.startsWith('image/') || ['png', 'jpg', 'jpeg', 'webp', 'avif', 'bmp', 'tiff', 'gif', 'heic', 'ico', 'svg'].includes(ext);
-      
-      const compatible = ext ? getCompatibleTargets(ext) : ALL_FORMATS;
-      const canUseHeroTarget = compatible.some(f => f.ext === heroTargetFormat);
+      const normExt = ext ? normalizeFormatExt(ext) : '';
+      const nonRenderableByImgTag =
+        ['heic', 'heif', 'tiff', 'tif', 'psd', 'tga'].includes(ext) ||
+        ['image/heic', 'image/heif', 'image/tiff'].includes(file.type.toLowerCase());
+      const isImg =
+        !nonRenderableByImgTag &&
+        (BROWSER_PREVIEWABLE_IMAGE_EXTS.has(ext) || file.type.startsWith('image/'));
+
+      const effectiveSource = normExt || defaultSourceExt || 'bin';
+      const compatible = effectiveSource !== 'bin' ? getCompatibleTargets(effectiveSource) : ALL_FORMATS.filter(f => f.ext !== 'psd');
+      const fallbackTarget = DEFAULT_TARGET_FORMATS[effectiveSource] || compatible[0]?.ext || 'webp';
+
+      const pickCompatibleOrFallback = (preferred?: string) => {
+        if (!preferred) return fallbackTarget;
+        const cleanPref = normalizeFormatExt(preferred);
+        return compatible.some(f => f.ext === cleanPref) ? cleanPref : fallbackTarget;
+      };
+
       const targetFmt = lockTargetToInitial
-        ? initialTarget
-        : activePreset?.target ||
-          (canUseHeroTarget ? heroTargetFormat : DEFAULT_TARGET_FORMATS[ext]) ||
-          'webp';
+        ? pickCompatibleOrFallback(initialTarget)
+        : activePreset?.target
+        ? pickCompatibleOrFallback(activePreset.target)
+        : pickCompatibleOrFallback(heroTargetFormat);
 
       return {
         id: Math.random().toString(36).substring(2, 9) + Date.now().toString(36),
@@ -136,9 +171,9 @@ export function useConversionQueue(
     });
 
     if (newItems.length > 0 && filesRef.current.length === 0) {
-      const firstExt = newItems[0].sourceExt;
-      if (ALL_FORMATS.some(f => f.ext === firstExt)) {
-        setHeroSourceFormat(firstExt);
+      const firstNorm = normalizeFormatExt(newItems[0].sourceExt);
+      if (ALL_FORMATS.some(f => f.ext === firstNorm)) {
+        setHeroSourceFormat(firstNorm);
         setHeroTargetFormat(newItems[0].targetFormat);
       }
     }
@@ -151,12 +186,14 @@ export function useConversionQueue(
 
   const handleSelectFormat = (formatExt: string) => {
     if (!activeFormatFileId) return;
+    const cleanFmt = normalizeFormatExt(formatExt);
+    bumpItemGeneration(activeFormatFileId);
     setFiles(prev =>
       prev.map(item =>
-        item.id === activeFormatFileId
+        item.id === activeFormatFileId && item.status !== 'converting'
           ? {
               ...item,
-              targetFormat: formatExt.toLowerCase(),
+              targetFormat: cleanFmt,
               status: 'idle',
               progress: 0,
               resultBlob: undefined,
@@ -169,12 +206,14 @@ export function useConversionQueue(
   };
 
   const handleSelectAllFormat = useCallback((formatExt: string) => {
-    const cleanFmt = formatExt.toLowerCase().replace('.', '');
+    const cleanFmt = normalizeFormatExt(formatExt);
     setHeroTargetFormat(cleanFmt);
     setFiles(prev =>
       prev.map(item => {
+        if (item.status === 'converting') return item;
         const compatible = getCompatibleTargets(item.sourceExt);
         if (compatible.some(f => f.ext === cleanFmt)) {
+          bumpItemGeneration(item.id);
           return {
             ...item,
             targetFormat: cleanFmt,
@@ -188,26 +227,31 @@ export function useConversionQueue(
         return item;
       })
     );
-  }, []);
+  }, [bumpItemGeneration]);
 
   const handleSaveSettings = useCallback((newSettings: ConversionSettings, applyToAll: boolean = false) => {
     if (applyToAll || isBatchSettingsOpen) {
       setFiles(prev =>
-        prev.map(item => ({
-          ...item,
-          settings: { ...newSettings },
-          status: 'idle',
-          progress: 0,
-          resultBlob: undefined,
-          resultFileName: undefined,
-          errorMessage: undefined,
-        }))
+        prev.map(item => {
+          if (item.status === 'converting') return item;
+          bumpItemGeneration(item.id);
+          return {
+            ...item,
+            settings: { ...newSettings },
+            status: 'idle',
+            progress: 0,
+            resultBlob: undefined,
+            resultFileName: undefined,
+            errorMessage: undefined,
+          };
+        })
       );
       setIsBatchSettingsOpen(false);
       return;
     }
 
     if (!activeSettingsFileId) return;
+    bumpItemGeneration(activeSettingsFileId);
     setFiles(prev =>
       prev.map(item =>
         item.id === activeSettingsFileId
@@ -223,9 +267,11 @@ export function useConversionQueue(
           : item
       )
     );
-  }, [activeSettingsFileId, isBatchSettingsOpen]);
+  }, [activeSettingsFileId, isBatchSettingsOpen, bumpItemGeneration]);
 
   const handleRemoveFile = (id: string) => {
+    bumpItemGeneration(id);
+    inFlightConversionsRef.current.delete(id);
     setFiles(prev => {
       const filtered = prev.filter(f => f.id !== id);
       const toRemove = prev.find(f => f.id === id);
@@ -236,6 +282,8 @@ export function useConversionQueue(
 
   const handleClearAll = () => {
     files.forEach(f => {
+      bumpItemGeneration(f.id);
+      inFlightConversionsRef.current.delete(f.id);
       if (f.previewUrl) URL.revokeObjectURL(f.previewUrl);
     });
     setFiles([]);
@@ -273,6 +321,7 @@ export function useConversionQueue(
 
     const handleDrop = (e: DragEvent) => {
       e.preventDefault();
+      e.stopPropagation();
       dragCounterRef.current = 0;
       setIsGlobalDragging(false);
       if (e.dataTransfer?.files && e.dataTransfer.files.length > 0) {
@@ -293,7 +342,7 @@ export function useConversionQueue(
       }
     };
 
-    // Use capture phase so window reliably intercepts drop & dragleave
+    // Use capture phase so window reliably intercepts drop & dragleave without double-firing Dropzone
     window.addEventListener('dragenter', handleDragEnter, true);
     window.addEventListener('dragleave', handleDragLeave, true);
     window.addEventListener('dragover', handleDragOver, true);
@@ -313,7 +362,14 @@ export function useConversionQueue(
 
   const handleConvertSingle = async (id: string) => {
     const targetItem = filesRef.current.find(f => f.id === id);
-    if (!targetItem) return;
+    if (!targetItem || targetItem.status === 'converting' || inFlightConversionsRef.current.has(id)) {
+      return;
+    }
+
+    const myGen = (itemGenerationRef.current.get(id) ?? 0) + 1;
+    itemGenerationRef.current.set(id, myGen);
+    inFlightConversionsRef.current.set(id, myGen);
+    setIsConvertingAny(true);
 
     setFiles(prev =>
       prev.map(f => (f.id === id ? { ...f, status: 'converting', progress: 10, errorMessage: undefined } : f))
@@ -325,12 +381,14 @@ export function useConversionQueue(
         targetItem.targetFormat,
         targetItem.settings,
         percent => {
+          if (itemGenerationRef.current.get(id) !== myGen) return;
           setFiles(prev =>
             prev.map(f => (f.id === id ? { ...f, progress: percent } : f))
           );
         }
       );
 
+      if (itemGenerationRef.current.get(id) !== myGen) return;
       setFiles(prev =>
         prev.map(f =>
           f.id === id
@@ -345,6 +403,7 @@ export function useConversionQueue(
         )
       );
     } catch (err: unknown) {
+      if (itemGenerationRef.current.get(id) !== myGen) return;
       setFiles(prev =>
         prev.map(f =>
           f.id === id
@@ -357,27 +416,40 @@ export function useConversionQueue(
             : f
         )
       );
+    } finally {
+      if (inFlightConversionsRef.current.get(id) === myGen) {
+        inFlightConversionsRef.current.delete(id);
+      }
+      if (!batchRunningRef.current && inFlightConversionsRef.current.size === 0) {
+        setIsConvertingAny(false);
+      }
     }
   };
 
   const handleConvertAll = async () => {
+    batchRunningRef.current = true;
     setIsConvertingAny(true);
-    const pendingItems = filesRef.current.filter(f => f.status === 'idle' || f.status === 'error');
-    
-    const CONCURRENCY = 3;
-    const queue = [...pendingItems];
-    
-    const workers = Array(Math.min(CONCURRENCY, queue.length)).fill(null).map(async () => {
-      while (queue.length > 0) {
-        const item = queue.shift();
-        if (item) {
-          await handleConvertSingle(item.id);
-        }
-      }
-    });
+    try {
+      const pendingItems = filesRef.current.filter(f => f.status === 'idle' || f.status === 'error');
+      const CONCURRENCY = 3;
+      const queue = [...pendingItems];
 
-    await Promise.all(workers);
-    setIsConvertingAny(false);
+      const workers = Array(Math.min(CONCURRENCY, queue.length)).fill(null).map(async () => {
+        while (queue.length > 0) {
+          const item = queue.shift();
+          if (item) {
+            await handleConvertSingle(item.id);
+          }
+        }
+      });
+
+      await Promise.all(workers);
+    } finally {
+      batchRunningRef.current = false;
+      if (inFlightConversionsRef.current.size === 0) {
+        setIsConvertingAny(false);
+      }
+    }
   };
 
   const handleDownloadAllZip = async () => {
@@ -428,6 +500,7 @@ export function useConversionQueue(
   };
 
   const handleMergeToPdf = async () => {
+    if (isConvertingAny || files.length === 0) return;
     const imageFiles = files.map(f => f.file);
     setIsConvertingAny(true);
     try {
@@ -436,7 +509,9 @@ export function useConversionQueue(
     } catch (err: unknown) {
       alert(`Merge failed: ${err instanceof Error ? err.message : 'Merge error'}`);
     } finally {
-      setIsConvertingAny(false);
+      if (!batchRunningRef.current && inFlightConversionsRef.current.size === 0) {
+        setIsConvertingAny(false);
+      }
     }
   };
 

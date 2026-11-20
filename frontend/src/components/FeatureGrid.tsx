@@ -7,7 +7,7 @@ export const FeatureGrid: React.FC = () => {
   const features = [
     {
       icon: <FileType className="w-4 h-4 text-slate-700 dark:text-slate-300" />,
-      title: '19+ Native Formats',
+      title: '18 Native Formats',
       desc: 'PNG, JPG, WebP, AVIF, SVG, ICO, BMP, TIFF, GIF, HEIC, PSD, TGA, PDF, DOCX, PPTX, XLSX, CSV, and TXT.',
     },
     {

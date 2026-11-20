@@ -3,26 +3,33 @@ from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 import asyncio
 from app.routers import image_converter, document_converter, pdf_tools, web_tools, file_host
-from app.config import SUPPORTED_IMAGE_FORMATS, SUPPORTED_DOC_FORMATS, ALLOWED_ORIGINS
-from app.services.utils import startup_cleanup
+from app.config import SUPPORTED_IMAGE_FORMATS, SUPPORTED_DOC_FORMATS, ALLOWED_ORIGINS, TEMP_FILE_TTL_SECONDS
+from app.services.utils import startup_cleanup, cleanup_stale_temp_dirs
 from app.services.r2_storage_service import cleanup_expired_files_job
 
 async def periodic_expiry_cleanup():
-    """Background task to regularly purge expired files (7-day lifecycle)."""
+    """Background task to regularly purge expired hosted files and stale converter temp directories."""
     while True:
         try:
             await asyncio.to_thread(cleanup_expired_files_job)
+            await asyncio.to_thread(cleanup_stale_temp_dirs, TEMP_FILE_TTL_SECONDS)
         except Exception as e:
             print(f"Error running periodic expiry cleanup: {e}")
         await asyncio.sleep(600)  # Run every 10 minutes
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup: clean temp directories
+    # Startup: clean stale temp directories safely
     startup_cleanup()
     cleanup_task = asyncio.create_task(periodic_expiry_cleanup())
-    yield
-    cleanup_task.cancel()
+    try:
+        yield
+    finally:
+        cleanup_task.cancel()
+        try:
+            await cleanup_task
+        except asyncio.CancelledError:
+            pass
 
 app = FastAPI(
     title="Tulusy API",

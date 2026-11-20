@@ -91,6 +91,9 @@ export const Footer: React.FC<FooterProps> = ({ onSelectTool }) => {
         <div className="pt-6 border-t border-slate-100 dark:border-slate-900 flex flex-col sm:flex-row items-center justify-between gap-3 text-[11px] text-slate-400 dark:text-slate-500">
           <p>© {new Date().getFullYear()} Tulusy. All rights reserved.</p>
           <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-1">
+            <Link href="/sitemap" className="hover:text-slate-700 dark:hover:text-slate-300 transition-colors">
+              Sitemap
+            </Link>
             <Link href="/privacy" className="hover:text-slate-700 dark:hover:text-slate-300 transition-colors">
               Privacy
             </Link>

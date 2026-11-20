@@ -1,21 +1,28 @@
 import csv
 import math
+import re
 from pathlib import Path
-from typing import List, Optional
 from xml.sax.saxutils import escape
-from app.config import MAX_PDF_PAGES, MAX_XLSX_PDF_ROWS
+from zipfile import BadZipFile
+from app.config import MAX_XLSX_PDF_ROWS
+from app.services.pdf_service import _open_valid_pdf
 
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+from openpyxl.utils.exceptions import InvalidFileException
 from reportlab.lib.pagesizes import letter, landscape
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib import colors
 
-try:
-    import pymupdf as fitz
-except ImportError:
-    import fitz
+_XML_ILLEGAL_CTRL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
+
+
+def _sanitize_excel_value(val: object) -> object:
+    """Strips illegal XML 1.0 control characters before writing strings to openpyxl cells."""
+    if isinstance(val, str):
+        return _XML_ILLEGAL_CTRL_RE.sub("", val)
+    return val
 
 
 def _safe_cell_text(val: str) -> str:
@@ -23,9 +30,16 @@ def _safe_cell_text(val: str) -> str:
     return escape(cleaned)
 
 
+def _open_xlsx(xlsx_path: Path, data_only: bool = True):
+    try:
+        return openpyxl.load_workbook(str(xlsx_path), data_only=data_only)
+    except (InvalidFileException, BadZipFile, OSError, KeyError, ValueError) as e:
+        raise ValueError(f"Invalid or corrupted Excel (.xlsx) workbook: {e}")
+
+
 def convert_xlsx_to_pdf(xlsx_path: Path, pdf_path: Path) -> Path:
     """Converts an Excel workbook (.xlsx) to a formatted tabular PDF document."""
-    wb = openpyxl.load_workbook(str(xlsx_path), data_only=True)
+    wb = _open_xlsx(xlsx_path, data_only=True)
     try:
         pdf_doc = SimpleDocTemplate(
             str(pdf_path),
@@ -36,11 +50,15 @@ def convert_xlsx_to_pdf(xlsx_path: Path, pdf_path: Path) -> Path:
             bottomMargin=20
         )
         styles = getSampleStyleSheet()
-        normal_style = styles["Normal"]
-        normal_style.fontSize = 8
-        normal_style.leading = 10
+        normal_style = ParagraphStyle(
+            "WorkbookNormal",
+            parent=styles["Normal"],
+            fontSize=8,
+            leading=10,
+        )
 
         story = []
+        total_rows = 0
 
         for sheet_name in wb.sheetnames:
             sheet = wb[sheet_name]
@@ -61,8 +79,9 @@ def convert_xlsx_to_pdf(xlsx_path: Path, pdf_path: Path) -> Path:
             MAX_CELL_CHARS = 800
             for row in sheet.iter_rows(values_only=True):
                 if any(cell is not None for cell in row):
-                    if len(raw_rows) >= MAX_XLSX_PDF_ROWS:
+                    if total_rows >= MAX_XLSX_PDF_ROWS:
                         raise ValueError(f"Spreadsheet exceeds maximum supported row limit for PDF conversion ({MAX_XLSX_PDF_ROWS} rows).")
+                    total_rows += 1
                     trimmed = list(row[:MAX_PDF_COLS])
                     row_vals = []
                     for cell in trimmed:
@@ -131,7 +150,7 @@ def convert_xlsx_to_pdf(xlsx_path: Path, pdf_path: Path) -> Path:
 
 def convert_xlsx_to_csv(xlsx_path: Path, csv_path: Path) -> Path:
     """Exports the first active worksheet of an Excel file to CSV format."""
-    wb = openpyxl.load_workbook(str(xlsx_path), data_only=True)
+    wb = _open_xlsx(xlsx_path, data_only=True)
     try:
         sheet = wb.active
         with open(csv_path, "w", newline="", encoding="utf-8") as f:
@@ -161,16 +180,19 @@ def convert_csv_to_xlsx(csv_path: Path, xlsx_path: Path) -> Path:
             bottom=Side(style="thin", color="E2E8F0")
         )
 
-        with open(csv_path, "r", encoding="utf-8", errors="ignore") as f:
+        with open(csv_path, "r", encoding="utf-8-sig", errors="ignore", newline="") as f:
             reader = csv.reader(f)
             for row_idx, row in enumerate(reader, start=1):
                 for col_idx, value in enumerate(row, start=1):
                     val = value.strip()
-                    if val.isdigit():
-                        cell_val = val if (len(val) > 1 and val.startswith("0")) else int(val)
+                    if val.isascii() and val.isdigit():
+                        cell_val: object = val if ((len(val) > 1 and val.startswith("0")) or len(val) > 15) else int(val)
                     else:
                         unsigned = val.lstrip("+-")
-                        if len(unsigned) > 1 and unsigned.startswith("0") and not unsigned.startswith("0."):
+                        if (
+                            "_" in val
+                            or (len(unsigned) > 1 and unsigned.startswith("0") and not unsigned.startswith("0."))
+                        ):
                             cell_val = val
                         else:
                             try:
@@ -179,7 +201,7 @@ def convert_csv_to_xlsx(csv_path: Path, xlsx_path: Path) -> Path:
                             except ValueError:
                                 cell_val = val
 
-                    cell = ws.cell(row=row_idx, column=col_idx, value=cell_val)
+                    cell = ws.cell(row=row_idx, column=col_idx, value=_sanitize_excel_value(cell_val))
                     cell.border = thin_border
 
                     if row_idx == 1:
@@ -212,7 +234,7 @@ def convert_csv_to_pdf(csv_path: Path, pdf_path: Path) -> Path:
 
 def convert_pdf_to_xlsx(pdf_path: Path, xlsx_path: Path) -> Path:
     """Extracts tabular data from a PDF document into an Excel spreadsheet (.xlsx)."""
-    doc = fitz.open(str(pdf_path))
+    doc = _open_valid_pdf(pdf_path)
     wb = openpyxl.Workbook()
     try:
         wb.remove(wb.active)
@@ -228,9 +250,6 @@ def convert_pdf_to_xlsx(pdf_path: Path, xlsx_path: Path) -> Path:
 
         has_any_data = False
 
-        if len(doc) > MAX_PDF_PAGES:
-            raise ValueError(f"PDF exceeds maximum supported page limit ({MAX_PDF_PAGES} pages).")
-
         for page_idx, page in enumerate(doc):
             ws = wb.create_sheet(title=f"Page {page_idx + 1}")
             tables = page.find_tables()
@@ -242,7 +261,8 @@ def convert_pdf_to_xlsx(pdf_path: Path, xlsx_path: Path) -> Path:
                     extracted = table.extract()
                     for r_idx, row in enumerate(extracted):
                         for c_idx, cell_value in enumerate(row):
-                            cell = ws.cell(row=current_row + r_idx, column=c_idx + 1, value=cell_value or "")
+                            safe_val = _sanitize_excel_value(cell_value or "")
+                            cell = ws.cell(row=current_row + r_idx, column=c_idx + 1, value=safe_val)
                             cell.border = thin_border
                             if r_idx == 0:
                                 cell.font = header_font
@@ -251,14 +271,14 @@ def convert_pdf_to_xlsx(pdf_path: Path, xlsx_path: Path) -> Path:
                     current_row += len(extracted) + 2
             else:
                 text_blocks = page.get_text("blocks")
-                if text_blocks:
+                text_only_blocks = [b for b in (text_blocks or []) if len(b) >= 7 and b[6] == 0 and str(b[4]).strip()]
+                if text_only_blocks:
                     has_any_data = True
-                    for block in text_blocks:
-                        if len(block) >= 5 and block[4].strip():
-                            lines = block[4].strip().split("\n")
-                            for l_idx, line in enumerate(lines):
-                                ws.cell(row=current_row + l_idx, column=1, value=line.strip())
-                            current_row += len(lines) + 1
+                    for block in text_only_blocks:
+                        lines = str(block[4]).strip().split("\n")
+                        for l_idx, line in enumerate(lines):
+                            ws.cell(row=current_row + l_idx, column=1, value=_sanitize_excel_value(line.strip()))
+                        current_row += len(lines) + 1
 
             for col in ws.columns:
                 max_len = max((len(str(cell.value or "")) for cell in col), default=10)
@@ -278,11 +298,34 @@ def convert_pdf_to_xlsx(pdf_path: Path, xlsx_path: Path) -> Path:
 
 
 def convert_pdf_to_csv(pdf_path: Path, csv_path: Path) -> Path:
-    """Extracts tabular or line data from a PDF into a CSV file."""
+    """Extracts tabular or line data from all pages of a PDF into a CSV file."""
     temp_xlsx = csv_path.parent / f"_tmp_{pdf_path.stem}.xlsx"
     try:
         convert_pdf_to_xlsx(pdf_path, temp_xlsx)
-        convert_xlsx_to_csv(temp_xlsx, csv_path)
+        wb = _open_xlsx(temp_xlsx, data_only=True)
+        try:
+            non_empty_sheets = []
+            for sheet in wb.worksheets:
+                rows = [
+                    [cell if cell is not None else "" for cell in row]
+                    for row in sheet.iter_rows(values_only=True)
+                    if any(cell is not None for cell in row)
+                ]
+                if rows:
+                    non_empty_sheets.append((sheet.title, rows))
+
+            with open(csv_path, "w", newline="", encoding="utf-8") as f:
+                writer = csv.writer(f)
+                multi_sheet = len(non_empty_sheets) > 1
+                for out_idx, (title, rows) in enumerate(non_empty_sheets):
+                    if multi_sheet:
+                        if out_idx > 0:
+                            writer.writerow([])
+                        writer.writerow([f"# {title}"])
+                    for row in rows:
+                        writer.writerow(row)
+        finally:
+            wb.close()
     finally:
         temp_xlsx.unlink(missing_ok=True)
     return csv_path
