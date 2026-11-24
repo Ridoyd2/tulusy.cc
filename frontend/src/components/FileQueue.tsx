@@ -12,10 +12,14 @@ import {
   FileText,
   Layers,
   ChevronDown,
-  RotateCcw
+  RotateCcw,
+  X
 } from 'lucide-react';
 import { FileItem } from '../types';
 import { downloadBlob } from '../lib/api';
+import { getCompatibleTargets, supportsImageParameters } from '../lib/formatRegistry';
+
+const MAX_CONVERTER_FILE_SIZE = 100 * 1024 * 1024;
 
 interface FileQueueProps {
   items: FileItem[];
@@ -28,6 +32,9 @@ interface FileQueueProps {
   onMergeToPdf?: () => void;
   onClearAll: () => void;
   isConvertingAny: boolean;
+  isMergingPdf?: boolean;
+  queueError?: string | null;
+  onDismissQueueError?: () => void;
   onOpenBatchFormat?: () => void;
   onOpenBatchSettings?: () => void;
 }
@@ -43,14 +50,24 @@ export const FileQueue: React.FC<FileQueueProps> = ({
   onMergeToPdf,
   onClearAll,
   isConvertingAny,
+  isMergingPdf = false,
+  queueError,
+  onDismissQueueError,
   onOpenBatchFormat,
   onOpenBatchSettings,
 }) => {
   if (items.length === 0) return null;
 
+  const isQueueBusy = isConvertingAny || isMergingPdf;
   const completedCount = items.filter(i => i.status === 'completed').length;
-  const allCompleted = completedCount === items.length && items.length > 0;
+  const convertibleItems = items.filter(
+    i => i.size > 0 && i.size <= MAX_CONVERTER_FILE_SIZE && getCompatibleTargets(i.sourceExt).length > 0
+  );
+  const allCompleted = convertibleItems.length > 0 && convertibleItems.every(i => i.status === 'completed');
+  const showBatchSettings = convertibleItems.some(i => supportsImageParameters(i.sourceExt, i.targetFormat));
   const allImages = items.every(i =>
+    i.size > 0 &&
+    i.size <= MAX_CONVERTER_FILE_SIZE &&
     ['png', 'jpg', 'jpeg', 'webp', 'avif', 'bmp', 'tiff', 'tif', 'gif', 'heic', 'heif', 'svg', 'psd', 'tga', 'ico'].includes(
       i.sourceExt.toLowerCase()
     )
@@ -64,6 +81,26 @@ export const FileQueue: React.FC<FileQueueProps> = ({
 
   return (
     <div className="w-full space-y-3">
+      {/* Inline Queue Action Error Banner */}
+      {queueError && (
+        <div className="p-3 rounded-xl bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-900/60 text-red-700 dark:text-red-300 text-xs flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2 min-w-0">
+            <AlertCircle className="w-4 h-4 shrink-0" />
+            <span className="truncate">{queueError}</span>
+          </div>
+          {onDismissQueueError && (
+            <button
+              type="button"
+              aria-label="Dismiss error"
+              onClick={onDismissQueueError}
+              className="p-1 rounded hover:bg-red-100 dark:hover:bg-red-900/40 shrink-0 cursor-pointer"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          )}
+        </div>
+      )}
+
       {/* Top Batch Controls Header */}
       <div className="panel rounded-xl p-3 sm:p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div className="flex items-center justify-between sm:justify-start gap-2.5 w-full sm:w-auto">
@@ -77,31 +114,31 @@ export const FileQueue: React.FC<FileQueueProps> = ({
           )}
 
           {/* All-in-One Format & Settings Controls */}
-          {items.length > 1 && !allCompleted && (
+          {convertibleItems.length > 1 && !allCompleted && (
             <div className="flex items-center gap-1.5 ml-1">
               {onOpenBatchFormat && (
                 <button
                   type="button"
                   onClick={onOpenBatchFormat}
-                  disabled={isConvertingAny}
+                  disabled={isQueueBusy}
                   className="px-2 py-1 rounded-md bg-slate-100 hover:bg-slate-200 text-slate-800 dark:bg-slate-800 dark:hover:bg-slate-700 border border-slate-200 dark:border-slate-700 dark:text-slate-200 text-xs font-mono font-semibold flex items-center gap-1 transition-colors cursor-pointer disabled:opacity-50"
                   title="Change output format for all files in queue"
                 >
                   <span className="text-[10px] text-slate-400 font-sans font-normal">All to:</span>
                   <span>
-                    {new Set(items.map(i => i.targetFormat.toLowerCase())).size === 1
-                      ? items[0]?.targetFormat?.toUpperCase() || 'TARGET'
+                    {new Set(convertibleItems.map(i => i.targetFormat.toLowerCase())).size === 1
+                      ? convertibleItems[0]?.targetFormat?.toUpperCase() || 'TARGET'
                       : 'MIXED'}
                   </span>
                   <ChevronDown className="w-3 h-3 text-slate-400" />
                 </button>
               )}
 
-              {onOpenBatchSettings && (
+              {onOpenBatchSettings && showBatchSettings && (
                 <button
                   type="button"
                   onClick={onOpenBatchSettings}
-                  disabled={isConvertingAny}
+                  disabled={isQueueBusy}
                   className="p-1.5 rounded-md bg-slate-100 hover:bg-slate-200 text-slate-600 dark:bg-slate-800 dark:hover:bg-slate-700 border border-slate-200 dark:border-slate-700 dark:text-slate-300 text-xs transition-colors cursor-pointer flex items-center justify-center disabled:opacity-50"
                   title="Configure all-in-one settings (quality, resolution, DPI) for all files"
                 >
@@ -118,11 +155,15 @@ export const FileQueue: React.FC<FileQueueProps> = ({
             <button
               type="button"
               onClick={onMergeToPdf}
-              disabled={isConvertingAny}
+              disabled={isQueueBusy}
               className="flex-1 sm:flex-none px-3 py-2 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 dark:bg-slate-800 dark:hover:bg-slate-700 border border-slate-200 dark:border-slate-700 dark:text-slate-200 text-xs font-medium flex items-center justify-center gap-1.5 transition-colors disabled:opacity-50 cursor-pointer"
             >
-              <Layers className="w-3.5 h-3.5" />
-              <span className="whitespace-nowrap">Merge into 1 PDF</span>
+              {isMergingPdf ? (
+                <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+              ) : (
+                <Layers className="w-3.5 h-3.5" />
+              )}
+              <span className="whitespace-nowrap">{isMergingPdf ? 'Merging PDF...' : 'Merge into 1 PDF'}</span>
             </button>
           )}
 
@@ -137,11 +178,11 @@ export const FileQueue: React.FC<FileQueueProps> = ({
             </button>
           )}
 
-          {!allCompleted && (
+          {convertibleItems.length > 0 && !allCompleted && (
             <button
               type="button"
               onClick={onConvertAll}
-              disabled={isConvertingAny}
+              disabled={isQueueBusy}
               className="flex-1 sm:flex-none px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium flex items-center justify-center gap-1.5 transition-colors disabled:opacity-50 cursor-pointer"
             >
               {isConvertingAny ? (
@@ -156,7 +197,7 @@ export const FileQueue: React.FC<FileQueueProps> = ({
           <button
             type="button"
             onClick={onClearAll}
-            disabled={isConvertingAny}
+            disabled={isQueueBusy}
             className="p-2 rounded-lg bg-slate-100 hover:bg-red-50 text-slate-500 hover:text-red-600 border border-slate-200 dark:bg-slate-800 dark:hover:bg-red-950/30 dark:border-slate-700 dark:text-slate-400 dark:hover:text-red-400 text-xs transition-colors disabled:opacity-50 flex items-center justify-center cursor-pointer"
             title="Clear queue"
           >
@@ -169,6 +210,11 @@ export const FileQueue: React.FC<FileQueueProps> = ({
       <div className="space-y-2">
         {items.map(item => {
           const isImg = item.previewUrl;
+          const isValidItem =
+            item.size > 0 &&
+            item.size <= MAX_CONVERTER_FILE_SIZE &&
+            getCompatibleTargets(item.sourceExt).length > 0;
+          const showItemSettings = isValidItem && supportsImageParameters(item.sourceExt, item.targetFormat);
           return (
             <div
               key={item.id}
@@ -212,7 +258,7 @@ export const FileQueue: React.FC<FileQueueProps> = ({
                         {formatFileSize(item.resultBlob.size)}
                       </span>
                       {item.size > item.resultBlob.size && (
-                        <span className="px-1.5 py-0.2 rounded bg-emerald-50 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-300 font-medium text-[10px]">
+                        <span className="px-1.5 py-0.5 rounded bg-emerald-50 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-300 font-medium text-[10px]">
                           -{Math.round(((item.size - item.resultBlob.size) / item.size) * 100)}%
                         </span>
                       )}
@@ -245,28 +291,32 @@ export const FileQueue: React.FC<FileQueueProps> = ({
 
               {/* Controls */}
               <div className="flex items-center justify-between sm:justify-end gap-2 pt-2 sm:pt-0 border-t sm:border-t-0 border-slate-100 dark:border-slate-800/60 shrink-0">
-                <div className="flex items-center gap-1.5">
-                  <span className="text-[11px] text-slate-400">Output</span>
+                {isValidItem && (
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-[11px] text-slate-400">Output</span>
+                    <button
+                      type="button"
+                      onClick={() => onOpenFormatModal(item.id)}
+                      disabled={item.status === 'converting' || isMergingPdf}
+                      className="px-2.5 py-1.5 rounded-md bg-slate-100 border border-slate-200 hover:border-slate-300 text-slate-800 dark:bg-slate-800 dark:border-slate-700 dark:hover:border-slate-600 dark:text-slate-200 font-semibold text-xs font-mono flex items-center gap-1.5 transition-colors disabled:opacity-50 cursor-pointer"
+                    >
+                      <span>{item.targetFormat.toUpperCase()}</span>
+                      <ChevronDown className="w-3 h-3 text-slate-400 shrink-0" />
+                    </button>
+                  </div>
+                )}
+
+                {showItemSettings && (
                   <button
                     type="button"
-                    onClick={() => onOpenFormatModal(item.id)}
-                    disabled={item.status === 'converting'}
-                    className="px-2.5 py-1.5 rounded-md bg-slate-100 border border-slate-200 hover:border-slate-300 text-slate-800 dark:bg-slate-800 dark:border-slate-700 dark:hover:border-slate-600 dark:text-slate-200 font-semibold text-xs font-mono flex items-center gap-1.5 transition-colors disabled:opacity-50 cursor-pointer"
+                    onClick={() => onOpenSettingsModal(item.id)}
+                    disabled={item.status === 'converting' || isMergingPdf}
+                    className="p-1.5 rounded-md hover:bg-slate-100 text-slate-500 dark:hover:bg-slate-800 dark:text-slate-400 transition-colors disabled:opacity-50 flex items-center justify-center cursor-pointer"
+                    title="Output parameters"
                   >
-                    <span>{item.targetFormat.toUpperCase()}</span>
-                    <ChevronDown className="w-3 h-3 text-slate-400 shrink-0" />
+                    <Sliders className="w-4 h-4" />
                   </button>
-                </div>
-
-                <button
-                  type="button"
-                  onClick={() => onOpenSettingsModal(item.id)}
-                  disabled={item.status === 'converting'}
-                  className="p-1.5 rounded-md hover:bg-slate-100 text-slate-500 dark:hover:bg-slate-800 dark:text-slate-400 transition-colors disabled:opacity-50 flex items-center justify-center cursor-pointer"
-                  title="Output parameters"
-                >
-                  <Sliders className="w-4 h-4" />
-                </button>
+                )}
 
                 {item.status === 'completed' ? (
                   <button
@@ -288,11 +338,11 @@ export const FileQueue: React.FC<FileQueueProps> = ({
                     <RefreshCw className="w-3.5 h-3.5 animate-spin shrink-0" />
                     <span>Working</span>
                   </div>
-                ) : item.status === 'error' ? (
+                ) : !isValidItem ? null : item.status === 'error' ? (
                   <button
                     type="button"
                     onClick={() => onConvertSingle(item.id)}
-                    disabled={isConvertingAny}
+                    disabled={isQueueBusy}
                     className="px-2.5 py-1.5 rounded-md bg-red-50 hover:bg-red-100 text-red-700 border border-red-200 dark:bg-red-950/40 dark:hover:bg-red-950/60 dark:border-red-800/70 dark:text-red-300 text-xs font-medium flex items-center gap-1 transition-colors cursor-pointer"
                   >
                     <RotateCcw className="w-3 h-3" />
@@ -302,7 +352,7 @@ export const FileQueue: React.FC<FileQueueProps> = ({
                   <button
                     type="button"
                     onClick={() => onConvertSingle(item.id)}
-                    disabled={isConvertingAny}
+                    disabled={isQueueBusy}
                     className="px-3 py-1.5 rounded-md bg-slate-900 hover:bg-slate-800 text-white dark:bg-white dark:hover:bg-slate-100 dark:text-slate-900 text-xs font-medium flex items-center gap-1.5 transition-colors disabled:opacity-50 cursor-pointer"
                   >
                     <Play className="w-3 h-3 fill-current" />

@@ -3,13 +3,13 @@ import shutil
 import sqlite3
 import time
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Literal, Optional
 
-from fastapi import APIRouter, BackgroundTasks, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, BackgroundTasks, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, RedirectResponse
 from pydantic import BaseModel, Field
 
-from app.config import HOSTING_DIR, MAX_HOSTING_FILE_SIZE
+from app.config import FOREVER_INACTIVITY_SECONDS, HOSTING_DIR, MAX_HOSTING_FILE_SIZE
 from app.services.r2_storage_service import (
     abort_multipart_session,
     complete_multipart_session,
@@ -20,6 +20,7 @@ from app.services.r2_storage_service import (
     get_db,
     get_file_metadata,
     prepare_download,
+    record_file_view,
 )
 
 router = APIRouter(prefix="/api/hosting", tags=["File Hosting"])
@@ -31,6 +32,7 @@ class InitUploadRequest(BaseModel):
     content_type: Optional[str] = None
     expiry_days: int = Field(1, ge=1, le=7)
     expiry_hours: Optional[int] = Field(None, ge=1, le=168)
+    expiry_mode: Literal["fixed", "forever_idle_7d"] = "fixed"
     max_downloads: int = Field(0, ge=0)
     password: Optional[str] = None
     use_multipart: bool = False
@@ -106,9 +108,18 @@ def _release_local_upload_claim(file_id: str, total_written: Optional[int] = Non
             cursor.execute("UPDATE hosted_files SET is_deleted = 2 WHERE id = ?", (file_id,))
             return True
         if total_written is not None:
+            # Forever shares start their 7-day idle window when the upload completes
+            now = int(time.time())
             cursor.execute(
-                "UPDATE hosted_files SET file_size = ?, upload_confirmed = 1 WHERE id = ? AND upload_confirmed = -1 AND is_deleted = 0",
-                (total_written, file_id),
+                """
+                UPDATE hosted_files
+                SET file_size = ?,
+                    upload_confirmed = 1,
+                    last_viewed_at = CASE WHEN expiry_mode = 'forever_idle_7d' THEN ? ELSE last_viewed_at END,
+                    expires_at = CASE WHEN expiry_mode = 'forever_idle_7d' THEN MAX(expires_at, ?) ELSE expires_at END
+                WHERE id = ? AND upload_confirmed = -1 AND is_deleted = 0
+                """,
+                (total_written, now, now + FOREVER_INACTIVITY_SECONDS, file_id),
             )
             return cursor.rowcount > 0
         cursor.execute(
@@ -151,6 +162,7 @@ async def init_upload(req: InitUploadRequest):
             password=req.password,
             auto_confirm=False,
             use_multipart=req.use_multipart,
+            expiry_mode=req.expiry_mode,
         )
         return {"status": "success", "data": session}
     except ValueError as e:
@@ -245,11 +257,31 @@ async def confirm_upload(file_id: str):
 
 @router.get("/info/{file_id}")
 async def get_info(file_id: str):
-    """Public metadata for the anonymous download page."""
+    """Public metadata for the anonymous download page (read-only: never counts as a view)."""
     meta = await asyncio.to_thread(get_file_metadata, file_id)
     if not meta:
         raise HTTPException(status_code=404, detail="File does not exist or has expired.")
     return {"status": "success", "file": meta}
+
+
+@router.post("/view/{file_id}")
+async def register_file_view(file_id: str, request: Request):
+    """
+    Records a human browser visit to the download page.
+    Forever shares slide their 7-day idle window forward; bots, link unfurlers, and
+    prefetch/prerender requests are ignored (counted=false). No viewer IP is stored.
+    """
+    user_agent = request.headers.get("user-agent")
+    purpose = (
+        request.headers.get("sec-purpose")
+        or request.headers.get("purpose")
+        or request.headers.get("x-moz")
+    )
+    res = await asyncio.to_thread(record_file_view, file_id, user_agent, purpose)
+    if not res:
+        raise HTTPException(status_code=404, detail="File does not exist or has expired.")
+    counted = bool(res.pop("counted", False))
+    return {"status": "success", "counted": counted, "file": res}
 
 
 @router.post("/download/{file_id}")
@@ -260,11 +292,18 @@ async def download_file(
     """
     Returns download URL (presigned R2 URL or short-lived single-use local stream URL).
     If Burn-on-Read is active on R2, cleanup preserves the 30-min presigned URL download window.
+    Downloads refresh the 7-day idle window of forever shares.
     """
     password = req.password if req else None
     try:
         res = await asyncio.to_thread(prepare_download, file_id, password, True)
-        return {"status": "success", "download_url": res["url"], "filename": res["filename"]}
+        return {
+            "status": "success",
+            "download_url": res["url"],
+            "filename": res["filename"],
+            "expires_at": res.get("expires_at"),
+            "seconds_remaining": res.get("seconds_remaining"),
+        }
     except PermissionError as pe:
         raise HTTPException(status_code=401, detail=str(pe))
     except ValueError as ve:

@@ -15,7 +15,7 @@ import { QuickTools } from './QuickTools';
 import { FeatureGrid } from './FeatureGrid';
 import { Footer } from './Footer';
 import { useConversionQueue } from '../hooks/useConversionQueue';
-import { normalizeFormatExt } from '../lib/formatRegistry';
+import { normalizeFormatExt, getCompatibleTargets } from '../lib/formatRegistry';
 import { ActiveTool, DEDICATED_TOOL_IDS, TOOL_ROUTES, getToolHref } from '@/lib/toolsConfig';
 
 const LEGACY_TOOL_PARAMS: ActiveTool[] = ['file-host', 'load-tester', 'my-ip', 'da-checker'];
@@ -35,7 +35,8 @@ export const HomeClient: React.FC = () => {
   const [heroPickerMode, setHeroPickerMode] = useState<'source' | 'target' | null>(null);
 
   const {
-    files, isConvertingAny, activePreset, setActivePreset,
+    files, isConvertingAny, isMergingPdf, queueError, setQueueError, batchAllowedTargets,
+    activePreset, setActivePreset,
     activeFormatFileId, setActiveFormatFileId, activeSettingsFileId, setActiveSettingsFileId,
     isBatchSettingsOpen, setIsBatchSettingsOpen, isBatchFormatOpen, setIsBatchFormatOpen,
     isGlobalDragging, setIsGlobalDragging, handleFilesAdded, handleSelectFormat, handleSelectAllFormat, handleSaveSettings,
@@ -62,7 +63,11 @@ export const HomeClient: React.FC = () => {
     }
   };
 
-  const uniqueBatchSources = new Set(files.map(f => normalizeFormatExt(f.sourceExt)));
+  const uniqueBatchSources = new Set(
+    files
+      .filter(f => f.size > 0 && f.size <= 100 * 1024 * 1024 && getCompatibleTargets(f.sourceExt).length > 0)
+      .map(f => normalizeFormatExt(f.sourceExt))
+  );
   const batchSourceExt = uniqueBatchSources.size === 1 ? Array.from(uniqueBatchSources)[0] : undefined;
 
   return (
@@ -70,7 +75,7 @@ export const HomeClient: React.FC = () => {
       {isGlobalDragging && (
         <div
           onClick={() => setIsGlobalDragging(false)}
-          className="fixed inset-0 z-50 bg-slate-900/20 dark:bg-black/50 backdrop-blur-xs border-2 border-dashed border-blue-600 rounded-xl m-3 flex flex-col items-center justify-center animate-in fade-in duration-150 cursor-pointer"
+          className="fixed inset-0 z-50 bg-slate-900/20 dark:bg-black/50 backdrop-blur-xs border-2 border-dashed border-blue-600 rounded-xl m-3 flex flex-col items-center justify-center transition-opacity cursor-pointer"
         >
           <div
             onClick={e => e.stopPropagation()}
@@ -125,6 +130,7 @@ export const HomeClient: React.FC = () => {
                 isCompact={files.length > 0}
                 acceptFilter={activePreset?.accept}
                 activePresetLabel={activePreset?.label ?? null}
+                onClearPreset={() => setActivePreset(null)}
               />
             </div>
 
@@ -141,6 +147,9 @@ export const HomeClient: React.FC = () => {
               onMergeToPdf={handleMergeToPdf}
               onClearAll={handleClearAll}
               isConvertingAny={isConvertingAny}
+              isMergingPdf={isMergingPdf}
+              queueError={queueError}
+              onDismissQueueError={() => setQueueError(null)}
             />
           </div>
 
@@ -194,6 +203,7 @@ export const HomeClient: React.FC = () => {
           setIsBatchFormatOpen(false);
         }}
         sourceExt={batchSourceExt}
+        allowedTargets={batchSourceExt ? undefined : batchAllowedTargets}
         currentSelected={files[0]?.targetFormat || heroTargetFormat}
         mode="target"
       />
@@ -238,6 +248,7 @@ export const HomeClient: React.FC = () => {
           }}
           onSave={handleSaveSettings}
           fileName={activeSettingsFile?.name}
+          sourceExt={activeSettingsFile?.sourceExt || (isBatchSettingsOpen ? batchSourceExt : undefined)}
           targetFormat={activeSettingsFile?.targetFormat || files[0]?.targetFormat}
           isBatch={isBatchSettingsOpen}
           totalFiles={files.length}

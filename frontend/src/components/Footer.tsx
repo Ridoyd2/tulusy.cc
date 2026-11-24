@@ -22,8 +22,8 @@ export const Footer: React.FC<FooterProps> = ({ onSelectTool }) => {
   ];
 
   return (
-    <footer className="w-full border-t border-slate-200/80 dark:border-slate-800/80 mt-16 bg-white dark:bg-slate-950 text-slate-600 dark:text-slate-400">
-      <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-10 sm:py-12 space-y-8">
+    <footer className="w-full border-t border-slate-200/80 dark:border-slate-800/80 mt-16 bg-white dark:bg-[#090d16] text-slate-600 dark:text-slate-400">
+      <div className="max-w-5xl mx-auto px-3 sm:px-6 lg:px-8 py-10 sm:py-12 space-y-8">
         {/* Main Grid: Brand + Tools + Conversions */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-8">
           {/* Brand Column */}
@@ -39,7 +39,7 @@ export const Footer: React.FC<FooterProps> = ({ onSelectTool }) => {
             </p>
             <div className="inline-flex items-center gap-1.5 text-[11px] text-slate-500 dark:text-slate-400 pt-1">
               <Shield className="w-3.5 h-3.5 text-blue-600 dark:text-blue-400 shrink-0" />
-              <span>Zero tracking · Encrypted ephemeral storage</span>
+              <span>Zero tracking · Encrypted R2 &amp; ephemeral storage</span>
             </div>
           </div>
 
@@ -89,7 +89,7 @@ export const Footer: React.FC<FooterProps> = ({ onSelectTool }) => {
 
         {/* Bottom Sub-footer */}
         <div className="pt-6 border-t border-slate-100 dark:border-slate-900 flex flex-col sm:flex-row items-center justify-between gap-3 text-[11px] text-slate-400 dark:text-slate-500">
-          <p>© {new Date().getFullYear()} Tulusy. All rights reserved.</p>
+          <p suppressHydrationWarning>© {new Date().getFullYear()} Tulusy. All rights reserved.</p>
           <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-1">
             <Link href="/sitemap" className="hover:text-slate-700 dark:hover:text-slate-300 transition-colors">
               Sitemap

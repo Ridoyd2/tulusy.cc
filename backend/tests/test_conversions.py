@@ -1,3 +1,4 @@
+import shutil
 import sys
 from pathlib import Path
 from PIL import Image, ImageDraw
@@ -36,6 +37,13 @@ from app.services.excel_service import (
 def run_tests():
     test_dir = BASE_DIR / "temp" / "test_run"
     test_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        _run_all_conversion_checks(test_dir)
+    finally:
+        shutil.rmtree(test_dir, ignore_errors=True)
+
+
+def _run_all_conversion_checks(test_dir: Path):
     print("[TEST] Starting automated backend conversion tests...")
 
     # 1. Create a dummy PNG image
@@ -387,7 +395,34 @@ def run_tests():
     assert (q_clamped, d_clamped) == (1, 72), f"Expected (1, 72), got {(q_clamped, d_clamped)}"
     print("[PASS] PDF -> CSV leading blank suppression & image zero-param clamping verified")
 
+    # 25. Verify extract_pdf_pages_to_images forwards width, grayscale & quality
+    import pymupdf as fitz_check
+    styled_pdf = test_dir / "styled_pdf_img.pdf"
+    sp_doc = fitz_check.open()
+    sp_pg = sp_doc.new_page(width=400, height=400)
+    sp_pg.draw_rect(fitz_check.Rect(10, 10, 390, 390), fill=(0.2, 0.5, 0.9))
+    sp_doc.save(str(styled_pdf))
+    sp_doc.close()
+
+    styled_imgs = extract_pdf_pages_to_images(
+        styled_pdf, test_dir, img_format="jpg", dpi=150, quality=75, width=120, grayscale=True
+    )
+    assert len(styled_imgs) == 1
+    with Image.open(styled_imgs[0]) as res_img:
+        assert res_img.width == 120, f"Expected width 120, got {res_img.width}"
+        px = res_img.getpixel((res_img.width // 2, res_img.height // 2))
+        is_gray = res_img.mode == "L" or (
+            isinstance(px, tuple) and abs(px[0] - px[1]) <= 2 and abs(px[1] - px[2]) <= 2
+        )
+        assert is_gray, f"Expected grayscale output, got mode={res_img.mode}, center_px={px}"
+    print("[PASS] PDF -> JPG resize (width=120), grayscale & quality forwarding verified")
+
     print("\n[SUCCESS] ALL BACKEND CONVERSION TESTS PASSED PERFECTLY!")
+
+
+def test_conversions():
+    run_tests()
+
 
 if __name__ == "__main__":
     run_tests()

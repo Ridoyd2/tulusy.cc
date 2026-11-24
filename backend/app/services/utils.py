@@ -34,12 +34,22 @@ IMAGE_MEDIA_TYPES = {
 }
 
 
+_WINDOWS_RESERVED_NAMES = {
+    "CON", "PRN", "AUX", "NUL",
+    "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+    "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+}
+
+
 def sanitize_filename_component(raw_name: Optional[str], default_name: str = "unnamed_file") -> str:
-    """Strips directory components, control chars, and Windows-unsafe filename characters."""
+    """Strips directory components, control chars, trailing dots, and Windows-unsafe filename characters."""
     raw = (raw_name or "").replace("\\", "/").split("/")[-1].strip()
-    clean = "".join(c for c in raw if ord(c) >= 32 and c not in '<>:"|?*')
+    clean = "".join(c for c in raw if ord(c) >= 32 and c not in '<>:"|?*').strip(" .")
     if not clean or clean in (".", ".."):
         return default_name
+    base_part = clean.split(".", 1)[0].upper()
+    if base_part in _WINDOWS_RESERVED_NAMES:
+        clean = f"_{clean}"
     return clean
 
 

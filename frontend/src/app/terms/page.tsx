@@ -32,7 +32,7 @@ export default function TermsPage() {
           2. Ephemeral Availability Disclaimer
         </h2>
         <p>
-          Files converted or hosted through Tulusy are ephemeral by design and expire automatically according to the configured window. Always retain your own local backup copy — Tulusy is provided &ldquo;as is&rdquo; without warranties regarding uninterrupted availability or recovery after expiration.
+          Files converted or hosted through Tulusy expire automatically according to the configured retention window or inactivity threshold (7 consecutive days with no views or downloads for Forever shares). Always retain your own local backup copy — Tulusy is provided &ldquo;as is&rdquo; without warranties regarding uninterrupted availability or recovery after expiration.
         </p>
       </section>
 

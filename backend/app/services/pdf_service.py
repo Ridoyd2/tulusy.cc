@@ -1,6 +1,6 @@
 import io
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 from xml.sax.saxutils import escape
 from zipfile import BadZipFile
 
@@ -22,7 +22,7 @@ from docx.opc.exceptions import PackageNotFoundError as DocxPackageNotFoundError
 from pptx.exc import PackageNotFoundError as PptxPackageNotFoundError
 from app.config import MAX_PDF_PAGES, MAX_TXT_PDF_LINES, WRITABLE_IMAGE_FORMATS
 from app.services.image_service import convert_single_image, load_image, _composite_to_rgb
-from app.services.utils import get_safe_stem, validate_target_format
+from app.services.utils import get_safe_stem, validate_image_params, validate_target_format
 
 
 def _open_valid_pdf(pdf_path: Path):
@@ -336,29 +336,29 @@ def extract_pdf_pages_to_images(
     pdf_path: Path,
     output_dir: Path,
     img_format: str = "png",
-    dpi: int = 300
+    dpi: int = 300,
+    quality: int = 90,
+    width: Optional[int] = None,
+    height: Optional[int] = None,
+    maintain_aspect_ratio: bool = True,
+    grayscale: bool = False,
+    bg_color: Optional[str] = "#FFFFFF",
 ) -> List[Path]:
     """Extracts all pages from a PDF document as high-resolution images in any supported format."""
     img_format = validate_target_format(img_format, WRITABLE_IMAGE_FORMATS - {"pdf"})
+    width, height, quality, dpi = validate_image_params(width, height, quality, dpi)
     doc = _open_valid_pdf(pdf_path)
     generated_files: List[Path] = []
 
     base_name = get_safe_stem(pdf_path.name, "document")
-    dpi = max(72, min(600, dpi if dpi is not None else 300))
 
     try:
         for idx, page in enumerate(doc):
             pix = page.get_pixmap(dpi=dpi, alpha=False)
             out_file = output_dir / f"{base_name}_page_{idx + 1}.{img_format}"
 
-            if img_format == "png":
+            if img_format == "png" and width is None and height is None and not grayscale:
                 pix.save(str(out_file), "png")
-            elif img_format in ["jpg", "jpeg"]:
-                pix.save(str(out_file), "jpeg")
-            elif img_format == "webp":
-                img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
-                img.save(str(out_file), "WEBP", quality=92)
-                img.close()
             else:
                 temp_png = output_dir / f"_tmp_{base_name}_{idx + 1}.png"
                 pix.save(str(temp_png), "png")
@@ -367,7 +367,13 @@ def extract_pdf_pages_to_images(
                         input_path=temp_png,
                         output_path=out_file,
                         target_format=img_format,
-                        dpi=dpi
+                        quality=quality,
+                        width=width,
+                        height=height,
+                        maintain_aspect_ratio=maintain_aspect_ratio,
+                        dpi=dpi,
+                        grayscale=grayscale,
+                        bg_color=bg_color or "#FFFFFF",
                     )
                 finally:
                     temp_png.unlink(missing_ok=True)

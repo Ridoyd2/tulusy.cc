@@ -12,6 +12,7 @@ sys.path.insert(0, str(BASE_DIR))
 from app.services.web_tools_service import (
     ANONYMOUS_USER_AGENT,
     _clean_asn,
+    _safe_float,
     _safe_fetch_with_redirects,
     analyze_website_da,
     get_active_outbound_shield,
@@ -179,7 +180,32 @@ async def _async_test_suite():
     assert _clean_asn("Local") == "Local"
     assert _clean_asn("") == "N/A"
     assert _clean_asn(None) == "N/A"
-    print("[PASS] ASN normalization verified without organization duplication")
+    assert _safe_float(None) == 0.0
+    assert _safe_float("23.81") == 23.81
+    assert _safe_float(float("nan")) == 0.0
+
+    with patch(
+        "app.services.web_tools_service.get_ip_intel",
+        return_value={
+            "ip": "8.8.8.8",
+            "country": "United States",
+            "country_code": "US",
+            "flag": "",
+            "region": "California",
+            "city": "Mountain View",
+            "postal": "94035",
+            "lat": 37.386,
+            "lon": -122.0838,
+            "timezone": "America/Los_Angeles",
+            "isp": "Google LLC",
+            "org": "Google Public DNS",
+            "asn": "AS15169",
+        },
+    ):
+        ext_res = await get_my_ip_details("8.8.8.8", {"user-agent": "TestAgent", "host": "tulusy.cc"}, "TestAgent", is_self=False)
+        assert ext_res["is_self"] is False
+        assert ext_res["headers"] == {}, f"Expected empty headers for external IP lookup, got {ext_res['headers']}"
+    print("[PASS] ASN normalization, _safe_float & external IP header isolation verified")
 
     ios_ua = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) CriOS/124.0.0.0 Mobile/15E148 Safari/604.1"
     ios_res = await get_my_ip_details("127.0.0.1", {"user-agent": ios_ua}, ios_ua)

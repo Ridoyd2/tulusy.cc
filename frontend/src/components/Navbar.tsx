@@ -70,8 +70,8 @@ export const Navbar: React.FC<NavbarProps> = ({
   ];
 
   return (
-    <header className="sticky top-0 z-40 w-full bg-white/95 dark:bg-slate-950/95 border-b border-slate-200/80 dark:border-slate-800 shadow-2xs dark:shadow-slate-950/50 backdrop-blur-md">
-      <div className="max-w-6xl mx-auto px-3 sm:px-6 lg:px-8">
+    <header className="sticky top-0 z-40 w-full bg-white/95 dark:bg-[#090d16]/95 border-b border-slate-200/80 dark:border-slate-800 shadow-2xs dark:shadow-slate-950/50 backdrop-blur-md">
+      <div className="max-w-5xl mx-auto px-3 sm:px-6 lg:px-8">
         <div className="h-14 flex items-center justify-between gap-3">
           {/* Brand */}
           <Link
@@ -115,17 +115,14 @@ export const Navbar: React.FC<NavbarProps> = ({
             title={theme ? `Switch to ${theme === 'dark' ? 'Light' : 'Dark'} mode` : 'Toggle Theme'}
             aria-label="Toggle color theme"
           >
-            {theme === 'dark' ? (
-              <Sun className="w-4 h-4 text-amber-400" />
-            ) : (
-              <Moon className="w-4 h-4" />
-            )}
+            <Sun className="w-4 h-4 text-amber-400 hidden dark:block" />
+            <Moon className="w-4 h-4 block dark:hidden" />
           </button>
         </div>
 
         {/* Quick Format Shortcuts Bar - Shown on Converter Tab when handler is provided */}
         {activeTool === 'converter' && onSelectQuickFilter && (
-          <div className="flex items-center justify-start sm:justify-center gap-1.5 overflow-x-auto no-scrollbar py-2 border-t border-slate-100 dark:border-slate-900 text-[11px] font-medium text-slate-600 dark:text-slate-400">
+          <div className="flex items-center justify-start sm:justify-center gap-1.5 overflow-x-auto no-scrollbar py-2 border-t border-slate-100 dark:border-slate-800/80 text-[11px] font-medium text-slate-600 dark:text-slate-400">
             <span className="text-slate-400 dark:text-slate-500 mr-1 shrink-0 font-medium">Popular:</span>
             {[
               { src: 'png', fmt: 'webp', accept: 'image/*,.heic,.psd,.tga', label: 'Image → WebP' },

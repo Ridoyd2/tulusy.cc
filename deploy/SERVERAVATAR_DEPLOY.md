@@ -9,10 +9,12 @@ Point your DNS records at your Hetzner VPS IP:
 
 ---
 
-## 2. Cloudflare R2 Bucket CORS (Required for 5 GB File Share)
+## 2. Cloudflare R2 Bucket CORS & Lifecycle Rules (Required for 5 GB File Share)
 In **Cloudflare Dashboard -> R2 -> Bucket (`tulusy`) -> Settings -> CORS Policy**, paste the contents of `deploy/r2-cors.json`:
 - Allows `PUT`, `GET`, `HEAD` from `https://tulusy.cc` and `https://www.tulusy.cc`
 - Allows `Content-Type` header for presigned browser uploads
+
+> **Important Lifecycle Setting:** Under **Object Lifecycle Rules**, do **NOT** enable "Delete uploaded objects after" with a fixed age (e.g. 7 days). That would delete active Forever files regardless of views. Only "Abort incomplete multipart uploads after 7 days" should be enabled. The Tulusy backend automatically handles object deletion upon expiration or 7-day inactivity.
 
 ---
 

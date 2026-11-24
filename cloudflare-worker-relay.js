@@ -303,6 +303,13 @@ export default {
 
       const response = await fetch(parsedTarget.toString(), init);
       const outHeaders = new Headers(response.headers);
+      const upstreamEncoding = response.headers.get('content-encoding');
+      if (upstreamEncoding) {
+        outHeaders.set('X-Original-Content-Encoding', upstreamEncoding);
+      }
+      outHeaders.delete('content-encoding');
+      outHeaders.delete('content-length');
+      outHeaders.delete('set-cookie');
       outHeaders.set('X-Relayed-Status', String(response.status));
 
       const isNullBody =

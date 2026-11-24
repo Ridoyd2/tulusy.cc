@@ -92,12 +92,19 @@ class TestFileHosting(unittest.TestCase):
         self.assertFalse(meta["requires_password"])
 
     def test_block_dangerous_extension(self):
-        """Test that executable files are blocked."""
+        """Test that executable files (including trailing-dot bypasses) are blocked and reserved names sanitized."""
         with self.assertRaises(ValueError):
             create_upload_session(
                 filename="trojan.exe",
                 file_size=1024
             )
+        with self.assertRaises(ValueError):
+            create_upload_session(
+                filename="payload.exe.",
+                file_size=1024
+            )
+        self.assertEqual(r2_service.sanitize_filename("CON.txt"), "_CON.txt")
+        self.assertEqual(r2_service.sanitize_filename("nul."), "_nul")
 
     def test_block_over_5gb(self):
         """Test that files over 5GB are rejected."""
@@ -372,6 +379,231 @@ class TestFileHosting(unittest.TestCase):
                     (int(time.time()) - 8000, fid),
                 )
 
+            cleanup_expired_files_job(force=True)
+            self.assertFalse(local_dir.exists())
+            with get_db() as conn:
+                conn.row_factory = sqlite3.Row
+                row = conn.execute("SELECT is_deleted FROM hosted_files WHERE id = ?", (fid,)).fetchone()
+                self.assertEqual(row["is_deleted"], 2)
+
+    def test_forever_session_validation_and_metadata(self):
+        """Forever mode initializes a 7-day idle window and rejects invalid combinations."""
+        session = create_upload_session(
+            filename="forever_notes.txt",
+            file_size=2048,
+            expiry_mode="forever_idle_7d",
+        )
+        fid = session["file_id"]
+        self.created_ids.append(fid)
+
+        self.assertEqual(session["expiry_mode"], "forever_idle_7d")
+        self.assertTrue(session["is_forever"])
+        self.assertEqual(session["expiry_days"], 7)
+        now = int(time.time())
+        self.assertGreaterEqual(session["expires_at"], now + (7 * 86400) - 5)
+
+        meta = get_file_metadata(fid)
+        self.assertIsNotNone(meta)
+        self.assertEqual(meta["views_count"], 0)
+        self.assertTrue(meta["is_forever"])
+        self.assertEqual(meta["expiry_mode"], "forever_idle_7d")
+
+        # Reject pairing forever with burn-on-read or download caps
+        with self.assertRaises(ValueError):
+            create_upload_session(
+                filename="illegal_burn.txt",
+                file_size=1024,
+                expiry_mode="forever_idle_7d",
+                max_downloads=1,
+            )
+
+        # Reject unknown expiry mode
+        with self.assertRaises(ValueError):
+            create_upload_session(
+                filename="invalid_mode.txt",
+                file_size=1024,
+                expiry_mode="unknown_mode",
+            )
+
+    def test_read_only_info_does_not_bump_views_or_slide_expiry(self):
+        """GET /info must stay read-only so SSR/OG unfurls never extend the idle window."""
+        client = TestClient(app)
+        session = create_upload_session(
+            filename="document.pdf",
+            file_size=4096,
+            expiry_mode="forever_idle_7d",
+        )
+        fid = session["file_id"]
+        self.created_ids.append(fid)
+
+        # Backdate expires_at slightly so we can detect any changes
+        initial_exp = int(time.time()) + (3 * 86400)
+        with get_db() as conn:
+            conn.execute("UPDATE hosted_files SET expires_at = ? WHERE id = ?", (initial_exp, fid))
+
+        resp = client.get(
+            f"/api/hosting/info/{fid}",
+            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0"},
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()["file"]["views_count"], 0)
+
+        with get_db() as conn:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute("SELECT views_count, expires_at FROM hosted_files WHERE id = ?", (fid,)).fetchone()
+            self.assertEqual(row["views_count"], 0)
+            self.assertEqual(row["expires_at"], initial_exp)
+
+    def test_record_view_sliding_renewal_and_bot_filtering(self):
+        """Browser views slide the 7-day window; bots, crawlers, and prefetch headers are ignored."""
+        client = TestClient(app)
+        session = create_upload_session(
+            filename="protected_shared.zip",
+            file_size=8192,
+            expiry_mode="forever_idle_7d",
+            password="ViewSecretPassword!",
+        )
+        fid = session["file_id"]
+        self.created_ids.append(fid)
+
+        # Backdate expires_at to 2 days from now
+        now = int(time.time())
+        old_exp = now + (2 * 86400)
+        with get_db() as conn:
+            conn.execute("UPDATE hosted_files SET expires_at = ? WHERE id = ?", (old_exp, fid))
+
+        # 1. Preview bots and CLI tools must return counted=False and leave views/expiry untouched
+        bot_uas = [
+            "Discordbot/2.0; +https://discordapp.com",
+            "WhatsApp/2.21.14.24 A",
+            "TelegramBot (like TwitterBot)",
+            "Slackbot-LinkExpanding 1.0",
+            "curl/8.4.0",
+            "python-requests/2.31.0",
+            "UptimeRobot/2.0 (http://www.uptimerobot.com/)",
+        ]
+        for bot_ua in bot_uas:
+            r = client.post(f"/api/hosting/view/{fid}", headers={"User-Agent": bot_ua})
+            self.assertEqual(r.status_code, 200)
+            self.assertFalse(r.json()["counted"])
+            self.assertEqual(r.json()["file"]["views_count"], 0)
+
+        # Prefetch header on browser UA must also be ignored
+        prefetch_r = client.post(
+            f"/api/hosting/view/{fid}",
+            headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0",
+                "Sec-Purpose": "prefetch",
+            },
+        )
+        self.assertEqual(prefetch_r.status_code, 200)
+        self.assertFalse(prefetch_r.json()["counted"])
+
+        # Verify nothing written to DB yet
+        with get_db() as conn:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute("SELECT views_count, expires_at FROM hosted_files WHERE id = ?", (fid,)).fetchone()
+            self.assertEqual(row["views_count"], 0)
+            self.assertEqual(row["expires_at"], old_exp)
+
+        # 2. Real browser visit increments view and resets expiry to ~now + 7 days
+        real_ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0 Safari/537.36"
+        view_r = client.post(f"/api/hosting/view/{fid}", headers={"User-Agent": real_ua})
+        self.assertEqual(view_r.status_code, 200)
+        self.assertTrue(view_r.json()["counted"])
+        self.assertEqual(view_r.json()["file"]["views_count"], 1)
+
+        refreshed_now = int(time.time())
+        with get_db() as conn:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute("SELECT views_count, expires_at FROM hosted_files WHERE id = ?", (fid,)).fetchone()
+            self.assertEqual(row["views_count"], 1)
+            self.assertGreaterEqual(row["expires_at"], refreshed_now + (7 * 86400) - 5)
+
+    def test_burn_on_read_view_safety(self):
+        """Viewing a Burn-on-Read file increments views_count without burning the file."""
+        client = TestClient(app)
+        session = create_upload_session(
+            filename="confidential.txt",
+            file_size=100,
+            max_downloads=1,
+        )
+        fid = session["file_id"]
+        self.created_ids.append(fid)
+
+        real_ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0"
+        view_r = client.post(f"/api/hosting/view/{fid}", headers={"User-Agent": real_ua})
+        self.assertEqual(view_r.status_code, 200)
+        self.assertTrue(view_r.json()["counted"])
+        self.assertEqual(view_r.json()["file"]["views_count"], 1)
+
+        # Ensure still active and not marked deleted/burned
+        with get_db() as conn:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute("SELECT is_deleted, downloads_count FROM hosted_files WHERE id = ?", (fid,)).fetchone()
+            self.assertEqual(row["is_deleted"], 0)
+            self.assertEqual(row["downloads_count"], 0)
+
+    def test_download_sliding_renewal_for_forever(self):
+        """Downloading a forever file refreshes the 7-day idle window."""
+        with patch("app.services.r2_storage_service.get_r2_client", return_value=None):
+            session = create_upload_session(
+                filename="keep_alive.bin",
+                file_size=512,
+                expiry_mode="forever_idle_7d",
+            )
+            fid = session["file_id"]
+            self.created_ids.append(fid)
+
+            # Create dummy local file so prepare_download succeeds
+            local_dir = r2_service.HOSTING_DIR / fid
+            local_dir.mkdir(parents=True, exist_ok=True)
+            (local_dir / "keep_alive.bin").write_bytes(b"x" * 512)
+
+            # Backdate expires_at to 1 hour from now
+            now = int(time.time())
+            old_exp = now + 3600
+            with get_db() as conn:
+                conn.execute("UPDATE hosted_files SET expires_at = ? WHERE id = ?", (old_exp, fid))
+
+            dl_res = prepare_download(fid, issue_stream_token=True)
+            self.assertIn("expires_at", dl_res)
+            self.assertGreaterEqual(dl_res["expires_at"], now + (7 * 86400) - 5)
+
+            with get_db() as conn:
+                conn.row_factory = sqlite3.Row
+                row = conn.execute("SELECT expires_at FROM hosted_files WHERE id = ?", (fid,)).fetchone()
+                self.assertGreaterEqual(row["expires_at"], now + (7 * 86400) - 5)
+
+    def test_forever_inactivity_cleanup_and_no_resurrection(self):
+        """Expired forever files return 404, reject view resurrection, and purge from storage."""
+        client = TestClient(app)
+        with patch("app.services.r2_storage_service.get_r2_client", return_value=None):
+            session = create_upload_session(
+                filename="abandoned.txt",
+                file_size=256,
+                expiry_mode="forever_idle_7d",
+            )
+            fid = session["file_id"]
+            self.created_ids.append(fid)
+
+            local_dir = r2_service.HOSTING_DIR / fid
+            local_dir.mkdir(parents=True, exist_ok=True)
+            (local_dir / "abandoned.txt").write_bytes(b"content")
+
+            # Backdate expires_at past now (7 days of inactivity elapsed)
+            with get_db() as conn:
+                conn.execute("UPDATE hosted_files SET expires_at = ? WHERE id = ?", (int(time.time()) - 20, fid))
+
+            # A late view attempt cannot revive an expired file
+            real_ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0"
+            view_r = client.post(f"/api/hosting/view/{fid}", headers={"User-Agent": real_ua})
+            self.assertEqual(view_r.status_code, 404)
+
+            info_r = client.get(f"/api/hosting/info/{fid}")
+            self.assertEqual(info_r.status_code, 404)
+
+            # Cleanup purges storage and marks row permanently deleted
             cleanup_expired_files_job(force=True)
             self.assertFalse(local_dir.exists())
             with get_db() as conn:

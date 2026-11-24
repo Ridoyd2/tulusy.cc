@@ -43,7 +43,7 @@ export const ALL_FORMATS: FormatOption[] = [
     name: 'SVG Vector Graphic',
     category: 'vector',
     mime: 'image/svg+xml',
-    description: 'Scalable vector graphics that render crisp at any display resolution.',
+    description: 'Scalable SVG vector input rasterization and embedded SVG container export.',
     popular: true,
     lossless: true,
   },
@@ -271,6 +271,47 @@ export function getCompatibleTargets(sourceExt: string): FormatOption[] {
     return [];
   }
 
-  // Fallback
-  return ALL_FORMATS.filter(f => f.ext !== ext && f.ext !== 'psd');
+  return [];
+}
+
+const MIME_TO_EXT: Record<string, string> = {
+  'image/png': 'png',
+  'image/jpeg': 'jpg',
+  'image/jpg': 'jpg',
+  'image/webp': 'webp',
+  'image/avif': 'avif',
+  'image/gif': 'gif',
+  'image/bmp': 'bmp',
+  'image/tiff': 'tiff',
+  'image/heic': 'heic',
+  'image/heif': 'heic',
+  'image/svg+xml': 'svg',
+  'image/x-icon': 'ico',
+  'image/vnd.microsoft.icon': 'ico',
+  'image/x-tga': 'tga',
+  'image/vnd.adobe.photoshop': 'psd',
+  'application/pdf': 'pdf',
+  'text/plain': 'txt',
+  'text/csv': 'csv',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'docx',
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation': 'pptx',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'xlsx',
+};
+
+export function inferFormatFromMime(mime?: string): string {
+  const clean = (mime || '').split(';')[0].trim().toLowerCase();
+  return MIME_TO_EXT[clean] || '';
+}
+
+const IMAGE_SOURCE_EXTS = new Set([
+  'png', 'jpg', 'jpeg', 'webp', 'avif', 'bmp', 'tiff', 'tif', 'gif', 'heic', 'heif', 'psd', 'tga', 'svg', 'ico',
+]);
+const PURE_DOC_TARGETS = new Set(['docx', 'pptx', 'xlsx', 'csv', 'txt']);
+
+export function supportsImageParameters(sourceExt: string, targetExt?: string): boolean {
+  const src = normalizeFormatExt(sourceExt);
+  const tgt = targetExt ? normalizeFormatExt(targetExt) : '';
+  if (IMAGE_SOURCE_EXTS.has(src)) return true;
+  if (src === 'pdf' && tgt && !PURE_DOC_TARGETS.has(tgt) && tgt !== 'pdf') return true;
+  return false;
 }

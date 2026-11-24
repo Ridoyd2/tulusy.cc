@@ -155,6 +155,7 @@ export async function executeBrowserLoadTest(params: {
   method?: string;
   payload?: string;
   cacheBust?: boolean;
+  signal?: AbortSignal;
 }): Promise<LoadTestResult> {
   const targetUrl = params.url.trim();
   let parsedUrl: URL;
@@ -197,99 +198,132 @@ export async function executeBrowserLoadTest(params: {
   let opaqueCount = 0;
   const totalStart = performance.now();
 
-  const runWorker = async () => {
-    while (nextId <= totalRequests) {
-      const reqId = nextId++;
-      let reqStart = performance.now();
-      let statusCode = 0;
-      let sizeBytes = 0;
-      let errStr: string | null = null;
-      let isOpaque = false;
+  const runSingle = async (reqId: number) => {
+    if (params.signal?.aborted) {
+      throw new DOMException('Benchmark aborted', 'AbortError');
+    }
 
-      let benchUrl = targetUrl;
-      if (params.cacheBust) {
-        const cacheUrl = new URL(targetUrl);
-        cacheUrl.searchParams.set('_t', `${Date.now()}_${reqId}`);
-        benchUrl = cacheUrl.toString();
+    let reqStart = performance.now();
+    let statusCode = 0;
+    let sizeBytes = 0;
+    let errStr: string | null = null;
+    let isOpaque = false;
+
+    let benchUrl = targetUrl;
+    if (params.cacheBust) {
+      const cacheUrl = new URL(targetUrl);
+      cacheUrl.searchParams.set('_t', `${Date.now()}_${reqId}`);
+      benchUrl = cacheUrl.toString();
+    }
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    const onParentAbort = () => controller.abort();
+    params.signal?.addEventListener('abort', onParentAbort, { once: true });
+
+    const fetchOpaque = async () => {
+      const opaqueResp = await fetch(benchUrl, {
+        method,
+        body: method === 'POST' ? params.payload : undefined,
+        cache: 'no-store',
+        mode: 'no-cors',
+        signal: controller.signal,
+      });
+      if (opaqueResp.type === 'opaque') {
+        isOpaque = true;
+        statusCode = 0;
+        opaqueCount++;
+      } else if (opaqueResp.ok) {
+        statusCode = opaqueResp.status || 200;
+      } else {
+        statusCode = opaqueResp.status || 0;
+        if (!statusCode) errStr = 'Connection Error';
       }
+    };
 
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), timeoutMs);
-
-      const fetchOpaque = async () => {
-        const opaqueResp = await fetch(benchUrl, {
-          method,
-          body: method === 'POST' ? params.payload : undefined,
-          cache: 'no-store',
-          mode: 'no-cors',
-          signal: controller.signal,
-        });
-        if (opaqueResp.type === 'opaque') {
-          isOpaque = true;
-          statusCode = 0;
-          opaqueCount++;
-        } else if (opaqueResp.ok) {
-          statusCode = opaqueResp.status || 200;
-        } else {
-          statusCode = opaqueResp.status || 0;
-          if (!statusCode) errStr = 'Connection Error';
-        }
-      };
-
-      try {
-        if (preferNoCors && canUseNoCors) {
-          await fetchOpaque();
-        } else {
-          try {
-            const corsResp = await fetch(benchUrl, {
-              method,
-              body: method === 'POST' || method === 'PUT' ? params.payload : undefined,
-              cache: 'no-store',
-              mode: 'cors',
-              signal: controller.signal,
-            });
-            statusCode = corsResp.status || 0;
-            const buf = await corsResp.arrayBuffer();
-            sizeBytes = buf.byteLength;
-          } catch (corsErr: unknown) {
-            if (corsErr instanceof Error && corsErr.name === 'AbortError') {
-              throw corsErr;
-            }
-            if (!canUseNoCors) {
-              errStr = `CORS blocked (${method} unsupported in no-CORS)`;
-            } else {
-              // Fallback to opaque no-cors timing when target endpoint does not send CORS headers
-              preferNoCors = true;
-              reqStart = performance.now();
+    try {
+      if (preferNoCors && canUseNoCors) {
+        await fetchOpaque();
+      } else {
+        try {
+          const corsResp = await fetch(benchUrl, {
+            method,
+            body: method === 'POST' || method === 'PUT' ? params.payload : undefined,
+            cache: 'no-store',
+            mode: 'cors',
+            signal: controller.signal,
+          });
+          statusCode = corsResp.status || 0;
+          const buf = await corsResp.arrayBuffer();
+          sizeBytes = buf.byteLength;
+        } catch (corsErr: unknown) {
+          if ((corsErr instanceof Error && corsErr.name === 'AbortError') || params.signal?.aborted) {
+            throw corsErr;
+          }
+          if (!canUseNoCors) {
+            errStr = `CORS blocked (${method} unsupported in no-CORS)`;
+          } else {
+            // Fallback to opaque no-cors timing when target endpoint does not send CORS headers
+            preferNoCors = true;
+            reqStart = performance.now();
+            try {
               await fetchOpaque();
+            } catch (opaqueErr: unknown) {
+              if (!(opaqueErr instanceof Error && opaqueErr.name === 'AbortError')) {
+                preferNoCors = false;
+              }
+              throw opaqueErr;
             }
           }
         }
-      } catch (err: unknown) {
-        if (err instanceof Error && err.name === 'AbortError') {
-          errStr = 'Timeout';
-        } else {
-          errStr = 'Connection Error';
-        }
-      } finally {
-        clearTimeout(timer);
       }
+    } catch (err: unknown) {
+      if (params.signal?.aborted) {
+        throw new DOMException('Benchmark aborted', 'AbortError');
+      }
+      if (err instanceof Error && err.name === 'AbortError') {
+        errStr = 'Timeout';
+      } else {
+        errStr = 'Connection Error';
+      }
+    } finally {
+      clearTimeout(timer);
+      params.signal?.removeEventListener('abort', onParentAbort);
+    }
 
-      const durationMs = Math.round((performance.now() - reqStart) * 100) / 100;
-      results.push({
-        id: reqId,
-        status_code: statusCode,
-        duration_ms: durationMs,
-        bytes: sizeBytes,
-        error: errStr,
-        success: statusCode >= 200 && statusCode < 400,
-        ...(isOpaque ? { opaque: true } : {}),
-      });
+    const durationMs = Math.round((performance.now() - reqStart) * 100) / 100;
+    results.push({
+      id: reqId,
+      status_code: statusCode,
+      duration_ms: durationMs,
+      bytes: sizeBytes,
+      error: errStr,
+      success: statusCode >= 200 && statusCode < 400,
+      ...(isOpaque ? { opaque: true } : {}),
+    });
+  };
+
+  if (totalRequests > 1 && canUseNoCors) {
+    // Run request #1 alone first so any CORS -> no-cors detection happens once instead of N times concurrently
+    nextId = 2;
+    await runSingle(1);
+  }
+
+  const runWorker = async () => {
+    while (nextId <= totalRequests) {
+      if (params.signal?.aborted) {
+        throw new DOMException('Benchmark aborted', 'AbortError');
+      }
+      const reqId = nextId++;
+      await runSingle(reqId);
     }
   };
 
-  const workers = Array.from({ length: Math.min(concurrency, totalRequests) }, () => runWorker());
-  await Promise.all(workers);
+  const remaining = totalRequests - (nextId - 1);
+  if (remaining > 0) {
+    const workers = Array.from({ length: Math.min(concurrency, remaining) }, () => runWorker());
+    await Promise.all(workers);
+  }
 
   const totalDurationSec = Math.max(0.001, (performance.now() - totalStart) / 1000);
   results.sort((a, b) => a.id - b.id);
@@ -321,7 +355,7 @@ export async function executeBrowserLoadTest(params: {
 
   const sorted = latencies.length > 0 ? [...latencies].sort((a, b) => a - b) : [0];
   const n = sorted.length;
-  const pct = (p: number) => sorted[Math.min(Math.floor(n * p), n - 1)] || 0;
+  const pct = (p: number) => sorted[Math.max(0, Math.min(Math.ceil(n * p) - 1, n - 1))] || 0;
   const avg = latencies.length > 0 ? Math.round((latencies.reduce((a, b) => a + b, 0) / n) * 100) / 100 : 0;
 
   return {
@@ -373,6 +407,7 @@ export async function executeLoadTest(params: {
   method?: string;
   payload?: string;
   executionMode?: 'browser' | 'edge';
+  signal?: AbortSignal;
 }): Promise<LoadTestResult> {
   // Default to Client Browser execution so the VPS origin IP never connects to external target URLs
   if (params.executionMode !== 'edge') {
@@ -380,10 +415,12 @@ export async function executeLoadTest(params: {
   }
 
   const base = getApiBaseUrl();
+  const { signal, ...bodyPayload } = params;
   const response = await fetch(`${base}/api/tools/load-test`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(params),
+    signal,
+    body: JSON.stringify(bodyPayload),
   });
 
   if (response.status === 403) {
@@ -392,7 +429,7 @@ export async function executeLoadTest(params: {
     return {
       ...browserResult,
       fallback_notice:
-        'Edge Relay is not configured on the server (CF_WORKER_RELAY_URL / WARP). Executed in Client Browser Mode to protect the server origin IP.',
+        'Edge Relay is currently unavailable on this server. Executed in Client Browser Mode to protect the server origin IP.',
     };
   }
 
@@ -431,7 +468,10 @@ export async function fetchMyIp(customIp?: string): Promise<IpDetailsResult> {
   // so the user sees their real public network details rather than 127.0.0.1 loopback.
   if (!customIp && (data.ip === '127.0.0.1' || data.ip === '::1' || data.ip === 'localhost')) {
     try {
-      const ipifyRes = await fetch('https://api.ipify.org?format=json', { cache: 'no-store' });
+      const ipifyRes = await fetch('https://api.ipify.org?format=json', {
+        cache: 'no-store',
+        signal: AbortSignal.timeout(3000),
+      });
       if (ipifyRes.ok) {
         const ipifyData = (await ipifyRes.json()) as { ip?: string };
         if (ipifyData?.ip && ipifyData.ip !== data.ip) {

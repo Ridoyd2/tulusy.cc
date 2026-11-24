@@ -149,7 +149,7 @@ function getLatestLastMod(relPaths) {
   return formatW3cDatetime(maxMs || Date.now());
 }
 
-const { SITE_URL, SITE_DOMAIN, SITE_ROOT_URL } = loadTsModule(
+const { SITE_URL, SITE_ROOT_URL } = loadTsModule(
   path.join(frontendRoot, 'src', 'lib', 'site.ts')
 );
 const { POPULAR_SEO_PAIRS, getConverterDirectoryGroups } = loadTsModule(
@@ -405,7 +405,6 @@ const robotsTxt = [
   'Disallow: /api/',
   'Disallow: /f/',
   '',
-  `Host: ${SITE_DOMAIN}`,
   `Sitemap: ${SITE_URL}/sitemap.xml`,
   '',
 ].join('\n');

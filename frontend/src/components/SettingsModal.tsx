@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { X, Lock, Unlock } from 'lucide-react';
 import { ConversionSettings } from '../types';
 
@@ -10,6 +10,7 @@ interface SettingsModalProps {
   settings: ConversionSettings;
   onSave: (newSettings: ConversionSettings, applyToAll?: boolean) => void;
   fileName?: string;
+  sourceExt?: string;
   targetFormat?: string;
   isBatch?: boolean;
   totalFiles?: number;
@@ -17,7 +18,7 @@ interface SettingsModalProps {
 
 export const SettingsModal: React.FC<SettingsModalProps> = (props) => {
   if (!props.isOpen) return null;
-  const resetKey = `${props.isBatch ? 'batch' : props.fileName || 'single'}-${props.targetFormat || ''}`;
+  const resetKey = `${props.isBatch ? 'batch' : props.fileName || 'single'}-${props.sourceExt || ''}-${props.targetFormat || ''}`;
   return <SettingsModalBody key={resetKey} {...props} />;
 };
 
@@ -26,6 +27,7 @@ const SettingsModalBody: React.FC<SettingsModalProps> = ({
   settings: initialSettings,
   onSave,
   fileName,
+  sourceExt,
   targetFormat,
   isBatch = false,
   totalFiles = 1,
@@ -33,19 +35,31 @@ const SettingsModalBody: React.FC<SettingsModalProps> = ({
   const [settings, setSettings] = useState<ConversionSettings>({ ...initialSettings });
   const [applyToAll, setApplyToAll] = useState<boolean>(isBatch);
 
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [onClose]);
+
   const handleSave = () => {
     onSave(settings, isBatch ? true : applyToAll);
     onClose();
   };
 
-  const showBgColor = ['jpg', 'jpeg', 'bmp', 'pdf'].includes((targetFormat || '').toLowerCase());
+  const isPdfSource = (sourceExt || '').toLowerCase() === 'pdf';
+  const showBgColor = !isPdfSource && ['jpg', 'jpeg', 'bmp', 'pdf'].includes((targetFormat || '').toLowerCase());
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-slate-900/50 dark:bg-black/70 backdrop-blur-xs animate-in fade-in duration-150"
+      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-slate-900/50 dark:bg-black/70 backdrop-blur-xs"
       onClick={onClose}
     >
       <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="settings-modal-title"
         className="relative w-full sm:max-w-md bg-white dark:bg-slate-900 border-t sm:border border-slate-200 dark:border-slate-800 rounded-t-2xl sm:rounded-xl shadow-2xl p-4 sm:p-5 overflow-hidden flex flex-col max-h-[88vh] sm:max-h-[85vh]"
         onClick={e => e.stopPropagation()}
       >
@@ -54,7 +68,7 @@ const SettingsModalBody: React.FC<SettingsModalProps> = ({
         {/* Header */}
         <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800">
           <div className="min-w-0 pr-3">
-            <h3 className="text-sm sm:text-base font-semibold text-slate-900 dark:text-white">
+            <h3 id="settings-modal-title" className="text-sm sm:text-base font-semibold text-slate-900 dark:text-white">
               {isBatch ? 'Batch Output Parameters' : 'Output Parameters'}
             </h3>
             {isBatch ? (
@@ -68,6 +82,8 @@ const SettingsModalBody: React.FC<SettingsModalProps> = ({
             ) : null}
           </div>
           <button
+            type="button"
+            aria-label="Close"
             onClick={onClose}
             className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer shrink-0"
           >
@@ -80,7 +96,7 @@ const SettingsModalBody: React.FC<SettingsModalProps> = ({
           {/* Quality Slider */}
           <div className="space-y-1.5">
             <div className="flex items-center justify-between">
-              <label className="text-xs font-medium text-slate-700 dark:text-slate-300">
+              <label htmlFor="settings-quality" className="text-xs font-medium text-slate-700 dark:text-slate-300">
                 Compression Quality
               </label>
               <span className="px-2 py-0.5 text-xs font-mono font-semibold rounded bg-slate-100 dark:bg-slate-800 text-slate-800 dark:text-slate-200 tabular-nums">
@@ -88,6 +104,7 @@ const SettingsModalBody: React.FC<SettingsModalProps> = ({
               </span>
             </div>
             <input
+              id="settings-quality"
               type="range"
               min="10"
               max="100"
@@ -103,11 +120,12 @@ const SettingsModalBody: React.FC<SettingsModalProps> = ({
 
           {/* Dimension Controls */}
           <div className="space-y-1.5">
-            <label className="text-xs font-medium text-slate-700 dark:text-slate-300">Dimensions (px)</label>
+            <span className="block text-xs font-medium text-slate-700 dark:text-slate-300">Dimensions (px)</span>
             <div className="grid grid-cols-2 gap-2.5">
               <div>
-                <span className="text-[11px] text-slate-400">Width</span>
+                <label htmlFor="settings-width" className="text-[11px] text-slate-400">Width</label>
                 <input
+                  id="settings-width"
                   type="number"
                   min="1"
                   max="16384"
@@ -124,8 +142,9 @@ const SettingsModalBody: React.FC<SettingsModalProps> = ({
                 />
               </div>
               <div>
-                <span className="text-[11px] text-slate-400">Height</span>
+                <label htmlFor="settings-height" className="text-[11px] text-slate-400">Height</label>
                 <input
+                  id="settings-height"
                   type="number"
                   min="1"
                   max="16384"
@@ -220,8 +239,11 @@ const SettingsModalBody: React.FC<SettingsModalProps> = ({
 
           {/* Extra options */}
           <div className="pt-2 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between">
-            <span className="text-xs text-slate-700 dark:text-slate-300 font-medium">Convert to Grayscale</span>
+            <label htmlFor="settings-grayscale" className="text-xs text-slate-700 dark:text-slate-300 font-medium cursor-pointer">
+              Convert to Grayscale
+            </label>
             <input
+              id="settings-grayscale"
               type="checkbox"
               checked={settings.grayscale}
               onChange={e => setSettings({ ...settings, grayscale: e.target.checked })}
@@ -232,11 +254,12 @@ const SettingsModalBody: React.FC<SettingsModalProps> = ({
           {/* Apply to all toggle when multiple files exist */}
           {totalFiles > 1 && !isBatch && (
             <div className="pt-2 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between">
-              <div>
+              <label htmlFor="settings-apply-all" className="cursor-pointer">
                 <p className="text-xs text-slate-800 dark:text-slate-200 font-medium">Apply to All Files</p>
                 <p className="text-[11px] text-slate-500">Update parameters for all {totalFiles} files in queue</p>
-              </div>
+              </label>
               <input
+                id="settings-apply-all"
                 type="checkbox"
                 checked={applyToAll}
                 onChange={e => setApplyToAll(e.target.checked)}

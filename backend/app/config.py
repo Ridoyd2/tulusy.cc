@@ -37,6 +37,9 @@ TEMP_FILE_TTL_SECONDS = int(os.getenv("TEMP_FILE_TTL_SECONDS", "3600").strip() o
 # Maximum file hosting size: 5GB
 MAX_HOSTING_FILE_SIZE = 5 * 1024 * 1024 * 1024  # 5 GB in bytes
 DEFAULT_HOSTING_EXPIRY_DAYS = 1  # 24 Hours (1 Day) default expiration
+# "Forever" shares stay hosted while active and are purged after this many days without views/downloads
+FOREVER_INACTIVITY_DAYS = 7
+FOREVER_INACTIVITY_SECONDS = FOREVER_INACTIVITY_DAYS * 86400
 
 # CORS allowed origins
 _default_origins = (

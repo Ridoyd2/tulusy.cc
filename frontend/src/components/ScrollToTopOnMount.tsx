@@ -11,6 +11,7 @@ export const ScrollToTopOnMount: React.FC = () => {
   const pathname = usePathname();
 
   useEffect(() => {
+    if (window.location.hash) return;
     try {
       window.scrollTo({ top: 0, left: 0, behavior: 'instant' });
     } catch {

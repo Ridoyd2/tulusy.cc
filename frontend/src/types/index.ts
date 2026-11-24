@@ -115,6 +115,7 @@ export interface IpDetailsResult {
   client_browser: string;
   client_os: string;
   user_agent?: string;
+  is_self?: boolean;
   headers: Record<string, string>;
 }
 
@@ -188,6 +189,8 @@ export interface MultipartPartUrl {
   upload_url: string;
 }
 
+export type HostingExpiryMode = 'fixed' | 'forever_idle_7d';
+
 export interface UploadSessionData {
   file_id: string;
   filename: string;
@@ -199,6 +202,8 @@ export interface UploadSessionData {
   expires_at: number;
   delete_token: string;
   expiry_days: number;
+  expiry_mode?: HostingExpiryMode;
+  is_forever?: boolean;
   upload_id?: string;
   part_size?: number;
   parts?: MultipartPartUrl[];

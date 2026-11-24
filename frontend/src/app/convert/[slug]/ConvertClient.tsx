@@ -29,6 +29,10 @@ export const ConvertClient: React.FC<ConvertClientProps> = ({ seoData }) => {
   const {
     files,
     isConvertingAny,
+    isMergingPdf,
+    queueError,
+    setQueueError,
+    batchAllowedTargets,
     activeFormatFileId,
     setActiveFormatFileId,
     activeSettingsFileId,
@@ -59,7 +63,11 @@ export const ConvertClient: React.FC<ConvertClientProps> = ({ seoData }) => {
   });
 
   const relatedPairs = getRelatedSEOPairs(seoData, 8);
-  const uniqueBatchSources = new Set(files.map(f => normalizeFormatExt(f.sourceExt)));
+  const uniqueBatchSources = new Set(
+    files
+      .filter(f => f.size > 0 && f.size <= 100 * 1024 * 1024 && getCompatibleTargets(f.sourceExt).length > 0)
+      .map(f => normalizeFormatExt(f.sourceExt))
+  );
   const batchSourceExt = uniqueBatchSources.size === 1 ? Array.from(uniqueBatchSources)[0] : undefined;
 
   return (
@@ -134,6 +142,9 @@ export const ConvertClient: React.FC<ConvertClientProps> = ({ seoData }) => {
             onMergeToPdf={handleMergeToPdf}
             onClearAll={handleClearAll}
             isConvertingAny={isConvertingAny}
+            isMergingPdf={isMergingPdf}
+            queueError={queueError}
+            onDismissQueueError={() => setQueueError(null)}
           />
         </div>
 
@@ -199,7 +210,7 @@ export const ConvertClient: React.FC<ConvertClientProps> = ({ seoData }) => {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 dark:divide-slate-800/70">
-                <tr className="bg-white dark:bg-slate-950">
+                <tr className="bg-white dark:bg-slate-900/50">
                   <td className="p-3.5 font-medium text-slate-500">Full Name</td>
                   <td className="p-3.5 text-slate-900 dark:text-slate-100">{seoData.sourceName}</td>
                   <td className="p-3.5 text-slate-900 dark:text-slate-100">{seoData.targetName}</td>
@@ -209,7 +220,7 @@ export const ConvertClient: React.FC<ConvertClientProps> = ({ seoData }) => {
                   <td className="p-3.5 text-slate-700 dark:text-slate-300">{seoData.sourceSpecs.type}</td>
                   <td className="p-3.5 text-slate-700 dark:text-slate-300">{seoData.targetSpecs.type}</td>
                 </tr>
-                <tr className="bg-white dark:bg-slate-950">
+                <tr className="bg-white dark:bg-slate-900/50">
                   <td className="p-3.5 font-medium text-slate-500">Standard / Developer</td>
                   <td className="p-3.5 text-slate-700 dark:text-slate-300">{seoData.sourceSpecs.developer}</td>
                   <td className="p-3.5 text-slate-700 dark:text-slate-300">{seoData.targetSpecs.developer}</td>
@@ -219,7 +230,7 @@ export const ConvertClient: React.FC<ConvertClientProps> = ({ seoData }) => {
                   <td className="p-3.5 font-mono text-xs text-slate-700 dark:text-slate-300">{seoData.sourceSpecs.mime}</td>
                   <td className="p-3.5 font-mono text-xs text-slate-700 dark:text-slate-300">{seoData.targetSpecs.mime}</td>
                 </tr>
-                <tr className="bg-white dark:bg-slate-950">
+                <tr className="bg-white dark:bg-slate-900/50">
                   <td className="p-3.5 font-medium text-slate-500">Compression Profile</td>
                   <td className="p-3.5 text-slate-700 dark:text-slate-300">{seoData.sourceSpecs.compression}</td>
                   <td className="p-3.5 text-slate-700 dark:text-slate-300">{seoData.targetSpecs.compression}</td>
@@ -317,6 +328,7 @@ export const ConvertClient: React.FC<ConvertClientProps> = ({ seoData }) => {
           setIsBatchFormatOpen(false);
         }}
         sourceExt={batchSourceExt}
+        allowedTargets={batchSourceExt ? undefined : batchAllowedTargets}
         currentSelected={files[0]?.targetFormat || seoData.target}
         mode="target"
       />
@@ -360,6 +372,7 @@ export const ConvertClient: React.FC<ConvertClientProps> = ({ seoData }) => {
           settings={activeSettingsFile?.settings || files[0]?.settings || DEFAULT_CONVERSION_SETTINGS}
           onSave={handleSaveSettings}
           fileName={activeSettingsFile?.name}
+          sourceExt={activeSettingsFile?.sourceExt || (isBatchSettingsOpen ? batchSourceExt : undefined)}
           targetFormat={activeSettingsFile?.targetFormat || files[0]?.targetFormat}
           isBatch={isBatchSettingsOpen}
           totalFiles={files.length}

@@ -205,18 +205,18 @@ export const DaChecker: React.FC = () => {
 
           {/* Search Snippet Preview */}
           <div className="panel p-4 sm:p-5 rounded-xl space-y-2.5">
-            <h3 className="text-xs sm:text-sm font-semibold text-slate-900 dark:text-white flex items-center gap-1.5">
+            <h2 className="text-xs sm:text-sm font-semibold text-slate-900 dark:text-white flex items-center gap-1.5">
               <Eye className="w-4 h-4 text-slate-400" />
               Search Engine Result Snippet
-            </h3>
+            </h2>
 
             <div className="p-3.5 rounded-lg bg-slate-50 dark:bg-slate-900/60 border border-slate-200/80 dark:border-slate-800 max-w-2xl space-y-1">
               <div className="text-xs text-slate-500 truncate">
                 {data.serp_preview.url}
               </div>
-              <h4 className="text-sm sm:text-base font-medium text-blue-700 dark:text-blue-400 truncate">
+              <p className="text-sm sm:text-base font-medium text-blue-700 dark:text-blue-400 truncate">
                 {data.serp_preview.title}
-              </h4>
+              </p>
               <p className="text-xs text-slate-600 dark:text-slate-300 line-clamp-2 leading-relaxed">
                 {data.serp_preview.snippet}
               </p>
@@ -224,7 +224,11 @@ export const DaChecker: React.FC = () => {
           </div>
 
           {/* Audit Tabs */}
-          <div className="flex items-center gap-1 border-b border-slate-200 dark:border-slate-800 pb-2 overflow-x-auto no-scrollbar">
+          <div
+            role="tablist"
+            aria-label="Domain audit sections"
+            className="flex items-center gap-1 border-b border-slate-200 dark:border-slate-800 pb-2 overflow-x-auto no-scrollbar"
+          >
             {(
               [
                 { id: 'seo', label: 'On-Page SEO', icon: <FileText className="w-3.5 h-3.5" /> },
@@ -236,6 +240,8 @@ export const DaChecker: React.FC = () => {
               <button
                 key={tab.id}
                 type="button"
+                role="tab"
+                aria-selected={activeTab === tab.id}
                 onClick={() => setActiveTab(tab.id)}
                 className={`px-3 py-1.5 rounded-lg text-xs font-medium flex items-center gap-1.5 transition-colors cursor-pointer whitespace-nowrap ${
                   activeTab === tab.id
@@ -258,7 +264,7 @@ export const DaChecker: React.FC = () => {
                     <span className="text-slate-500 font-medium block">
                       Title Tag ({data.on_page_seo.title_length} chars)
                     </span>
-                    <p className="font-medium text-slate-900 dark:text-slate-100 mt-1 break-all">
+                    <p className="font-medium text-slate-900 dark:text-slate-100 mt-1 break-words">
                       {data.on_page_seo.title || '<Missing Title>'}
                     </p>
                   </div>
@@ -267,7 +273,7 @@ export const DaChecker: React.FC = () => {
                     <span className="text-slate-500 font-medium block">
                       Meta Description ({data.on_page_seo.meta_description_length} chars)
                     </span>
-                    <p className="text-slate-700 dark:text-slate-300 mt-1 leading-relaxed">
+                    <p className="text-slate-700 dark:text-slate-300 mt-1 leading-relaxed break-words">
                       {data.on_page_seo.meta_description || '<Missing Meta Description>'}
                     </p>
                   </div>
@@ -295,10 +301,24 @@ export const DaChecker: React.FC = () => {
                     </span>
                   </div>
 
-                  <div className="flex justify-between items-center pt-2">
+                  <div className="flex justify-between items-center py-2">
                     <span className="text-slate-500">OpenGraph Metadata</span>
                     <span className="font-medium text-slate-900 dark:text-slate-200">
                       {data.on_page_seo.has_opengraph ? 'Present' : 'Missing'}
+                    </span>
+                  </div>
+
+                  <div className="flex justify-between items-center gap-3 py-2">
+                    <span className="text-slate-500 shrink-0">Canonical URL</span>
+                    <span className="font-mono text-[11px] text-slate-900 dark:text-slate-200 truncate">
+                      {data.on_page_seo.canonical_url || 'Missing'}
+                    </span>
+                  </div>
+
+                  <div className="flex justify-between items-center pt-2">
+                    <span className="text-slate-500">Mobile Viewport</span>
+                    <span className="font-medium text-slate-900 dark:text-slate-200">
+                      {data.on_page_seo.has_viewport ? 'Configured' : 'Missing'}
                     </span>
                   </div>
                 </div>
@@ -311,10 +331,10 @@ export const DaChecker: React.FC = () => {
             <div className="panel p-4 sm:p-5 rounded-xl">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
                 <div className="p-3.5 rounded-lg bg-slate-50 dark:bg-slate-800/40 border border-slate-200/70 dark:border-slate-800 space-y-2">
-                  <h4 className="font-semibold text-slate-900 dark:text-slate-100 flex items-center gap-1.5">
+                  <h2 className="font-semibold text-slate-900 dark:text-slate-100 flex items-center gap-1.5">
                     <ShieldCheck className="w-4 h-4 text-slate-400" />
                     TLS Certificate
-                  </h4>
+                  </h2>
                   <div className="space-y-1.5 pt-1">
                     <div className="flex justify-between">
                       <span className="text-slate-500">Status</span>
@@ -348,10 +368,10 @@ export const DaChecker: React.FC = () => {
                 </div>
 
                 <div className="p-3.5 rounded-lg bg-slate-50 dark:bg-slate-800/40 border border-slate-200/70 dark:border-slate-800 space-y-2">
-                  <h4 className="font-semibold text-slate-900 dark:text-slate-100 flex items-center gap-1.5">
+                  <h2 className="font-semibold text-slate-900 dark:text-slate-100 flex items-center gap-1.5">
                     <Lock className="w-4 h-4 text-slate-400" />
                     Response Security Headers
-                  </h4>
+                  </h2>
                   <div className="space-y-1.5 pt-1">
                     {Object.entries(data.security_headers).map(([hdr, active]) => (
                       <div key={hdr} className="flex justify-between items-center">
@@ -378,12 +398,20 @@ export const DaChecker: React.FC = () => {
             <div className="panel p-4 sm:p-5 rounded-xl">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
                 <div className="p-3.5 rounded-lg bg-slate-50 dark:bg-slate-800/40 border border-slate-200/70 dark:border-slate-800 space-y-2">
-                  <h4 className="font-semibold text-slate-900 dark:text-slate-100">Origin Server</h4>
+                  <h2 className="font-semibold text-slate-900 dark:text-slate-100">Origin Server</h2>
                   <div className="space-y-1.5 pt-1">
                     <div className="flex justify-between">
-                      <span className="text-slate-500">Resolved IP</span>
+                      <span className="text-slate-500">HTTP Status</span>
                       <span className="font-mono text-slate-900 dark:text-slate-200 tabular-nums">
-                        {data.technical.server_ip}
+                        HTTP {data.status_code}
+                      </span>
+                    </div>
+                    <div className="flex justify-between gap-3">
+                      <span className="text-slate-500 shrink-0">DNS A Records</span>
+                      <span className="font-mono text-slate-900 dark:text-slate-200 tabular-nums truncate max-w-[200px]">
+                        {data.technical.dns_a_records?.length
+                          ? data.technical.dns_a_records.join(', ')
+                          : data.technical.server_ip}
                       </span>
                     </div>
                     <div className="flex justify-between">
@@ -408,7 +436,7 @@ export const DaChecker: React.FC = () => {
                 </div>
 
                 <div className="p-3.5 rounded-lg bg-slate-50 dark:bg-slate-800/40 border border-slate-200/70 dark:border-slate-800 space-y-2">
-                  <h4 className="font-semibold text-slate-900 dark:text-slate-100">Indexing & Compression</h4>
+                  <h2 className="font-semibold text-slate-900 dark:text-slate-100">Indexing & Compression</h2>
                   <div className="space-y-1.5 pt-1">
                     <div className="flex justify-between items-center">
                       <span className="text-slate-500">robots.txt</span>

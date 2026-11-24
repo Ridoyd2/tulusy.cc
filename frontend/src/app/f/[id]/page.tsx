@@ -30,12 +30,25 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
       title: 'File Unavailable',
       description: 'The requested file has expired or does not exist.',
       robots: { index: false, follow: false },
+      openGraph: {
+        title: 'File Unavailable | Tulusy',
+        description: 'This shared file has expired or has been removed.',
+        type: 'website',
+      },
+      twitter: {
+        card: 'summary',
+        title: 'File Unavailable | Tulusy',
+        description: 'This shared file has expired or has been removed.',
+      },
     };
   }
 
   const pageTitle = `Download ${file.filename}`;
   const socialTitle = `${pageTitle} | Tulusy File Share`;
-  const desc = `Download ${file.filename} (${(file.file_size / (1024 * 1024)).toFixed(2)} MB). Anonymous file hosting powered by Cloudflare R2 with automatic expiration.`;
+  const retentionNote = file.is_forever
+    ? 'Hosted while active and auto-deleted after 7 days without views.'
+    : 'Anonymous file hosting powered by Cloudflare R2 with automatic expiration.';
+  const desc = `Download ${file.filename} (${(file.file_size / (1024 * 1024)).toFixed(2)} MB). ${retentionNote}`;
 
   return {
     title: pageTitle,

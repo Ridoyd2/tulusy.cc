@@ -19,6 +19,8 @@ from app.config import (
     BASE_DIR,
     BLOCKED_HOSTING_EXTENSIONS,
     DEFAULT_HOSTING_EXPIRY_DAYS,
+    FOREVER_INACTIVITY_DAYS,
+    FOREVER_INACTIVITY_SECONDS,
     HOSTING_DIR,
     MAX_HOSTING_FILE_SIZE,
     R2_ACCESS_KEY_ID,
@@ -33,6 +35,10 @@ BURN_PURGE_GRACE_SECONDS = 1800  # Matches presigned GET URL ExpiresIn (30 minut
 MULTIPART_THRESHOLD_BYTES = 64 * 1024 * 1024  # 64 MB
 SINGLE_PUT_MAX_BYTES = 4_800_000_000  # Keep safe margin below R2 5,000,000,000-byte single PUT limit
 _MIME_RE = re.compile(r"^[a-zA-Z0-9!#$&^_.+-]+/[a-zA-Z0-9!#$&^_.+-]+$")
+
+EXPIRY_MODE_FIXED = "fixed"
+EXPIRY_MODE_FOREVER = "forever_idle_7d"  # Hosted while active; purged after 7 days without views/downloads
+VALID_EXPIRY_MODES = (EXPIRY_MODE_FIXED, EXPIRY_MODE_FOREVER)
 
 
 @contextmanager
@@ -75,7 +81,10 @@ def init_db():
                         is_deleted INTEGER DEFAULT 0,
                         purge_after INTEGER DEFAULT 0,
                         upload_confirmed INTEGER DEFAULT 1,
-                        multipart_upload_id TEXT DEFAULT ''
+                        multipart_upload_id TEXT DEFAULT '',
+                        expiry_mode TEXT DEFAULT 'fixed',
+                        views_count INTEGER DEFAULT 0,
+                        last_viewed_at INTEGER DEFAULT 0
                     )
                 """)
 
@@ -88,6 +97,12 @@ def init_db():
                     cursor.execute("ALTER TABLE hosted_files ADD COLUMN upload_confirmed INTEGER DEFAULT 1")
                 if "multipart_upload_id" not in existing_cols:
                     cursor.execute("ALTER TABLE hosted_files ADD COLUMN multipart_upload_id TEXT DEFAULT ''")
+                if "expiry_mode" not in existing_cols:
+                    cursor.execute("ALTER TABLE hosted_files ADD COLUMN expiry_mode TEXT DEFAULT 'fixed'")
+                if "views_count" not in existing_cols:
+                    cursor.execute("ALTER TABLE hosted_files ADD COLUMN views_count INTEGER DEFAULT 0")
+                if "last_viewed_at" not in existing_cols:
+                    cursor.execute("ALTER TABLE hosted_files ADD COLUMN last_viewed_at INTEGER DEFAULT 0")
 
                 cursor.execute("""
                     CREATE TABLE IF NOT EXISTS file_reports (
@@ -143,16 +158,30 @@ def get_r2_client():
     )
 
 
+_WINDOWS_RESERVED_NAMES = {
+    "CON", "PRN", "AUX", "NUL",
+    "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+    "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+}
+
+
 def sanitize_filename(filename: str) -> str:
-    """Strips directory components and control characters from a filename."""
-    clean = filename.replace("\\", "/").split("/")[-1].strip()
+    """Strips directory components, control chars, trailing dots, and Windows reserved device names."""
+    clean = (filename or "").replace("\\", "/").split("/")[-1].strip()
     clean = "".join(c for c in clean if ord(c) >= 32 and c not in '<>:"|?*')
-    return clean or "unnamed_file"
+    clean = clean.strip(" .")
+    if not clean or clean in (".", ".."):
+        return "unnamed_file"
+    base_part = clean.split(".", 1)[0].upper()
+    if base_part in _WINDOWS_RESERVED_NAMES:
+        clean = f"_{clean}"
+    return clean
 
 
 def is_extension_allowed(filename: str) -> bool:
-    """Verifies filename is safe and not an executable / malicious payload."""
-    ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+    """Verifies normalized filename is safe and not an executable / malicious payload."""
+    normalized = sanitize_filename(filename)
+    ext = normalized.rsplit(".", 1)[-1].lower() if "." in normalized else ""
     return ext not in BLOCKED_HOSTING_EXTENSIONS
 
 
@@ -226,10 +255,13 @@ def create_upload_session(
     password: Optional[str] = None,
     auto_confirm: bool = True,
     use_multipart: bool = False,
+    expiry_mode: str = EXPIRY_MODE_FIXED,
 ) -> Dict[str, Any]:
     """
     Creates an anonymous upload session.
     Returns presigned PUT / Multipart URLs for Cloudflare R2 (or fallback direct local route).
+    expiry_mode="forever_idle_7d" keeps the file hosted while active and purges it after
+    FOREVER_INACTIVITY_DAYS without any browser view or download.
     """
     safe_name = sanitize_filename(filename)
 
@@ -242,11 +274,20 @@ def create_upload_session(
     if not is_extension_allowed(safe_name):
         raise ValueError("Executable files are restricted for security.")
 
+    mode = (expiry_mode or EXPIRY_MODE_FIXED).strip().lower()
+    if mode not in VALID_EXPIRY_MODES:
+        raise ValueError("Invalid expiry mode.")
+    if mode == EXPIRY_MODE_FOREVER and max_downloads > 0:
+        raise ValueError("Download-limited or burn-on-read files cannot use forever retention.")
+
     file_id = _allocate_unique_file_id()
     delete_token = secrets.token_hex(16)
     created_at = int(time.time())
 
-    if expiry_hours is not None and expiry_hours > 0:
+    if mode == EXPIRY_MODE_FOREVER:
+        expiry_days = FOREVER_INACTIVITY_DAYS
+        expires_at = created_at + FOREVER_INACTIVITY_SECONDS
+    elif expiry_hours is not None and expiry_hours > 0:
         capped_hours = max(1, min(168, expiry_hours))
         expires_at = created_at + (capped_hours * 3600)
         expiry_days = max(1, round(capped_hours / 24))
@@ -322,8 +363,9 @@ def create_upload_session(
                     id, original_name, file_size, content_type, storage_type,
                     storage_key, created_at, expires_at, delete_token,
                     downloads_count, max_downloads, password_hash, is_deleted,
-                    purge_after, upload_confirmed, multipart_upload_id
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, 0, 0, ?, ?)
+                    purge_after, upload_confirmed, multipart_upload_id,
+                    expiry_mode, views_count, last_viewed_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, 0, 0, ?, ?, ?, 0, ?)
                 """,
                 (
                     file_id,
@@ -339,6 +381,8 @@ def create_upload_session(
                     password_hash,
                     confirmed_flag,
                     multipart_upload_id,
+                    mode,
+                    created_at,
                 ),
             )
     except Exception:
@@ -364,15 +408,20 @@ def create_upload_session(
         "expires_at": expires_at,
         "delete_token": delete_token,
         "expiry_days": expiry_days,
+        "expiry_mode": mode,
+        "is_forever": mode == EXPIRY_MODE_FOREVER,
         **multipart_data,
     }
 
 
 def complete_multipart_session(file_id: str, upload_id: str, parts: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """Finalizes a multipart upload in Cloudflare R2 and verifies uploaded size."""
+    """Finalizes a multipart upload in Cloudflare R2 atomically and verifies uploaded size."""
+    now = int(time.time())
     with get_db() as conn:
         conn.row_factory = sqlite3.Row
-        row = conn.execute(
+        conn.execute("BEGIN IMMEDIATE")
+        cursor = conn.cursor()
+        row = cursor.execute(
             "SELECT * FROM hosted_files WHERE id = ? AND is_deleted = 0",
             (file_id,),
         ).fetchone()
@@ -382,17 +431,28 @@ def complete_multipart_session(file_id: str, upload_id: str, parts: List[Dict[st
             raise ValueError("Multipart upload is only valid for R2 storage sessions.")
         if row["upload_confirmed"] != 0:
             raise ValueError("Upload session is already confirmed or in progress.")
-        if row["expires_at"] <= int(time.time()):
-            conn.execute("UPDATE hosted_files SET is_deleted = 1, purge_after = ? WHERE id = ?", (int(time.time()), file_id))
+        if row["expires_at"] <= now:
+            cursor.execute("UPDATE hosted_files SET is_deleted = 1, purge_after = ? WHERE id = ?", (now, file_id))
             conn.commit()
             raise ValueError("Upload session has expired.")
         expected_upload_id = row["multipart_upload_id"] or ""
         if not expected_upload_id or not hmac.compare_digest(expected_upload_id, upload_id.strip()):
             raise ValueError("Invalid multipart upload ID for this session.")
+        cursor.execute(
+            "UPDATE hosted_files SET upload_confirmed = -1 WHERE id = ? AND upload_confirmed = 0 AND is_deleted = 0",
+            (file_id,),
+        )
+        if cursor.rowcount == 0:
+            raise ValueError("Upload session is already confirmed or in progress.")
         storage_key = row["storage_key"]
 
     r2_client = get_r2_client()
     if not r2_client:
+        with get_db() as conn:
+            conn.execute(
+                "UPDATE hosted_files SET upload_confirmed = 0 WHERE id = ? AND upload_confirmed = -1 AND is_deleted = 0",
+                (file_id,),
+            )
         raise RuntimeError("Cloudflare R2 is not configured.")
 
     sorted_parts = sorted(
@@ -407,8 +467,29 @@ def complete_multipart_session(file_id: str, upload_id: str, parts: List[Dict[st
             MultipartUpload={"Parts": sorted_parts},
         )
     except ClientError as ce:
+        with get_db() as conn:
+            conn.execute(
+                "UPDATE hosted_files SET upload_confirmed = 0 WHERE id = ? AND upload_confirmed = -1 AND is_deleted = 0",
+                (file_id,),
+            )
         raise ValueError(f"Failed to finalize multipart upload in R2 storage: {ce}")
-    return confirm_upload_session(file_id)
+    except Exception:
+        with get_db() as conn:
+            conn.execute(
+                "UPDATE hosted_files SET upload_confirmed = 0 WHERE id = ? AND upload_confirmed = -1 AND is_deleted = 0",
+                (file_id,),
+            )
+        raise
+
+    try:
+        return confirm_upload_session(file_id, allow_in_progress=True)
+    except Exception:
+        with get_db() as conn:
+            conn.execute(
+                "UPDATE hosted_files SET upload_confirmed = 0 WHERE id = ? AND upload_confirmed = -1 AND is_deleted = 0",
+                (file_id,),
+            )
+        raise
 
 
 def abort_multipart_session(file_id: str, upload_id: str) -> None:
@@ -445,7 +526,7 @@ def abort_multipart_session(file_id: str, upload_id: str) -> None:
                 pass
 
 
-def confirm_upload_session(file_id: str) -> Dict[str, Any]:
+def confirm_upload_session(file_id: str, allow_in_progress: bool = False) -> Dict[str, Any]:
     """Verifies that uploaded bytes actually exist in R2/local storage before activating the share link."""
     now = int(time.time())
     with get_db() as conn:
@@ -461,7 +542,7 @@ def confirm_upload_session(file_id: str) -> Dict[str, Any]:
             cursor.execute("UPDATE hosted_files SET is_deleted = 1, purge_after = ? WHERE id = ?", (now, file_id))
             conn.commit()
             raise ValueError("File session expired.")
-        if row["upload_confirmed"] == -1:
+        if row["upload_confirmed"] == -1 and not allow_in_progress:
             raise ValueError("Upload is still in progress.")
         storage_type = row["storage_type"]
         storage_key = row["storage_key"]
@@ -496,11 +577,32 @@ def confirm_upload_session(file_id: str) -> Dict[str, Any]:
                 conn.execute("UPDATE hosted_files SET is_deleted = 2 WHERE id = ?", (file_id,))
             raise ValueError("Uploaded file size is invalid or exceeds 5GB limit.")
 
+    # Forever shares get a fresh 7-day idle window once the upload actually completes (slow multi-GB
+    # uploads must not lose idle time). Already-confirmed rows are never refreshed by re-confirming.
+    confirm_now = int(time.time())
+    status_clause = "(upload_confirmed >= 0 OR upload_confirmed = -1)" if allow_in_progress else "upload_confirmed >= 0"
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute(
-            "UPDATE hosted_files SET upload_confirmed = 1, file_size = ? WHERE id = ? AND is_deleted = 0 AND upload_confirmed >= 0 AND expires_at > ?",
-            (actual_size, file_id, int(time.time())),
+            f"""
+            UPDATE hosted_files
+            SET upload_confirmed = 1,
+                file_size = ?,
+                last_viewed_at = CASE
+                    WHEN expiry_mode = ? AND upload_confirmed != 1 THEN ? ELSE last_viewed_at END,
+                expires_at = CASE
+                    WHEN expiry_mode = ? AND upload_confirmed != 1 THEN MAX(expires_at, ?) ELSE expires_at END
+            WHERE id = ? AND is_deleted = 0 AND {status_clause} AND expires_at > ?
+            """,
+            (
+                actual_size,
+                EXPIRY_MODE_FOREVER,
+                confirm_now,
+                EXPIRY_MODE_FOREVER,
+                confirm_now + FOREVER_INACTIVITY_SECONDS,
+                file_id,
+                confirm_now,
+            ),
         )
         if cursor.rowcount == 0:
             raise ValueError("File session expired or invalid.")
@@ -511,8 +613,38 @@ def confirm_upload_session(file_id: str) -> Dict[str, Any]:
     return meta
 
 
+def _row_expiry_mode(row: sqlite3.Row) -> str:
+    try:
+        mode = row["expiry_mode"]
+    except (IndexError, KeyError):
+        mode = None
+    return mode if mode in VALID_EXPIRY_MODES else EXPIRY_MODE_FIXED
+
+
+def _build_public_metadata(row: sqlite3.Row, now: int) -> Dict[str, Any]:
+    """Shapes a hosted_files row into the public download-page metadata payload."""
+    mode = _row_expiry_mode(row)
+    expires_at = int(row["expires_at"])
+    return {
+        "file_id": row["id"],
+        "filename": row["original_name"],
+        "file_size": row["file_size"],
+        "content_type": row["content_type"],
+        "created_at": row["created_at"],
+        "expires_at": expires_at,
+        "downloads_count": row["downloads_count"],
+        "views_count": row["views_count"] or 0,
+        "last_viewed_at": row["last_viewed_at"] or row["created_at"],
+        "expiry_mode": mode,
+        "is_forever": mode == EXPIRY_MODE_FOREVER,
+        "requires_password": bool(row["password_hash"]),
+        "is_burn_after_reading": row["max_downloads"] == 1,
+        "seconds_remaining": max(0, expires_at - now),
+    }
+
+
 def get_file_metadata(file_id: str) -> Optional[Dict[str, Any]]:
-    """Retrieves public metadata for confirmed, non-expired hosted files."""
+    """Retrieves public metadata for confirmed, non-expired hosted files (read-only: never counts views)."""
     with get_db() as conn:
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
@@ -531,18 +663,91 @@ def get_file_metadata(file_id: str) -> Optional[Dict[str, Any]]:
             )
             return None
 
-        return {
-            "file_id": row["id"],
-            "filename": row["original_name"],
-            "file_size": row["file_size"],
-            "content_type": row["content_type"],
-            "created_at": row["created_at"],
-            "expires_at": row["expires_at"],
-            "downloads_count": row["downloads_count"],
-            "requires_password": bool(row["password_hash"]),
-            "is_burn_after_reading": row["max_downloads"] == 1,
-            "seconds_remaining": max(0, row["expires_at"] - now),
-        }
+        return _build_public_metadata(row, now)
+
+
+# Link-preview unfurlers, crawlers, uptime monitors, headless browsers, and CLI/HTTP libraries.
+# These must never count as views or keep an otherwise idle "forever" share alive.
+_AUTOMATED_UA_RE = re.compile(
+    r"((?<!cu)bot|crawler|spider|slurp|archiver|scraper|preview|unfurl|headless|lighthouse|"
+    r"phantomjs|playwright|puppeteer|selenium|discord|whatsapp|telegram|slack|"
+    r"facebookexternalhit|facebookcatalog|twitterbot|linkedinbot|pinterest|embedly|iframely|"
+    r"applebot|google-inspectiontool|mastodon|http\.rb|cardyb|vkshare|"
+    r"uptimerobot|pingdom|statuscake|betterstack|hetrixtools|site24x7|"
+    r"curl/|wget/|python-requests|python-urllib|python-httpx|httpx/|aiohttp/|"
+    r"go-http-client|java/|okhttp/|axios/|node-fetch|undici|libwww-perl|postmanruntime)",
+    re.IGNORECASE,
+)
+
+
+def is_bot_or_prefetch_request(user_agent: Optional[str], purpose: Optional[str] = None) -> bool:
+    """True for empty/automated User-Agents and speculative prefetch/prerender requests."""
+    if purpose and any(tok in purpose.lower() for tok in ("prefetch", "prerender", "preview")):
+        return True
+    ua = (user_agent or "").strip()
+    if not ua:
+        return True
+    return bool(_AUTOMATED_UA_RE.search(ua))
+
+
+def record_file_view(
+    file_id: str,
+    user_agent: Optional[str] = None,
+    purpose: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    """
+    Records a human browser visit to the download page.
+    Increments views_count and, for forever shares, slides expires_at to now + 7 days.
+    Automated/prefetch requests return metadata with counted=False and perform no writes.
+    Expired links are never revived. No viewer IP or identifier is stored.
+    """
+    if not file_id or len(file_id) > 64:
+        return None
+
+    automated = is_bot_or_prefetch_request(user_agent, purpose)
+    now = int(time.time())
+    with get_db() as conn:
+        conn.row_factory = sqlite3.Row
+        if not automated:
+            conn.execute("BEGIN IMMEDIATE")
+        cursor = conn.cursor()
+        row = cursor.execute(
+            "SELECT * FROM hosted_files WHERE id = ? AND is_deleted = 0 AND upload_confirmed = 1",
+            (file_id,),
+        ).fetchone()
+        if not row:
+            return None
+        if row["expires_at"] <= now:
+            cursor.execute(
+                "UPDATE hosted_files SET is_deleted = 1, purge_after = ? WHERE id = ?",
+                (now, file_id),
+            )
+            return None
+
+        if automated:
+            meta = _build_public_metadata(row, now)
+            meta["counted"] = False
+            return meta
+
+        new_expires_at = int(row["expires_at"])
+        if _row_expiry_mode(row) == EXPIRY_MODE_FOREVER:
+            new_expires_at = max(new_expires_at, now + FOREVER_INACTIVITY_SECONDS)
+
+        cursor.execute(
+            """
+            UPDATE hosted_files
+            SET views_count = COALESCE(views_count, 0) + 1, last_viewed_at = ?, expires_at = ?
+            WHERE id = ? AND is_deleted = 0 AND upload_confirmed = 1 AND expires_at > ?
+            """,
+            (now, new_expires_at, file_id, now),
+        )
+        if cursor.rowcount == 0:
+            return None
+
+        updated = cursor.execute("SELECT * FROM hosted_files WHERE id = ?", (file_id,)).fetchone()
+        meta = _build_public_metadata(updated, now)
+        meta["counted"] = True
+        return meta
 
 
 def prepare_download(file_id: str, password: Optional[str] = None, issue_stream_token: bool = False) -> Dict[str, Any]:
@@ -613,27 +818,40 @@ def prepare_download(file_id: str, password: Optional[str] = None, issue_stream_
         new_downloads = row["downloads_count"] + 1
         is_burn = row["max_downloads"] > 0 and new_downloads >= row["max_downloads"]
 
+        # Downloads count as link activity: forever shares slide their 7-day idle window forward
+        current_expires_at = int(row["expires_at"])
+        if _row_expiry_mode(row) == EXPIRY_MODE_FOREVER and not is_burn:
+            new_expires_at = max(current_expires_at, now + FOREVER_INACTIVITY_SECONDS)
+        else:
+            new_expires_at = current_expires_at
+        seconds_remaining = max(0, new_expires_at - now)
+
         if storage_type == "r2":
             if not r2_client:
                 r2_client = get_r2_client()
             if not r2_client:
                 raise RuntimeError("Cloudflare R2 is currently unreachable.")
-
-            cursor.execute(
-                "UPDATE hosted_files SET downloads_count = ?, is_deleted = ?, purge_after = ? WHERE id = ?",
-                (
-                    new_downloads,
-                    1 if is_burn else 0,
-                    now + BURN_PURGE_GRACE_SECONDS if is_burn else 0,
-                    file_id,
-                ),
-            )
+            burn_purge_after = now + BURN_PURGE_GRACE_SECONDS
         else:
-            cursor.execute(
-                "UPDATE hosted_files SET downloads_count = ?, is_deleted = ?, purge_after = ? WHERE id = ?",
-                (new_downloads, 1 if is_burn else 0, now + 300 if is_burn else 0, file_id),
-            )
+            burn_purge_after = now + 300
 
+        cursor.execute(
+            """
+            UPDATE hosted_files
+            SET downloads_count = ?, is_deleted = ?, purge_after = ?, expires_at = ?, last_viewed_at = ?
+            WHERE id = ?
+            """,
+            (
+                new_downloads,
+                1 if is_burn else 0,
+                burn_purge_after if is_burn else 0,
+                new_expires_at,
+                now,
+                file_id,
+            ),
+        )
+
+        if storage_type != "r2":
             if issue_stream_token:
                 stream_token = secrets.token_urlsafe(24)
                 cursor.execute(
@@ -645,6 +863,8 @@ def prepare_download(file_id: str, password: Optional[str] = None, issue_stream_
                     "url": f"/api/hosting/stream/{file_id}?token={stream_token}",
                     "filename": filename,
                     "burn": is_burn,
+                    "expires_at": new_expires_at,
+                    "seconds_remaining": seconds_remaining,
                 }
 
             return {
@@ -654,6 +874,8 @@ def prepare_download(file_id: str, password: Optional[str] = None, issue_stream_
                 "content_type": content_type,
                 "burn": is_burn,
                 "file_dir": HOSTING_DIR / file_id,
+                "expires_at": new_expires_at,
+                "seconds_remaining": seconds_remaining,
             }
 
     content_disposition = _build_content_disposition(filename)
@@ -673,6 +895,8 @@ def prepare_download(file_id: str, password: Optional[str] = None, issue_stream_
         "filename": filename,
         "burn": is_burn,
         "storage_key": storage_key,
+        "expires_at": new_expires_at,
+        "seconds_remaining": seconds_remaining,
     }
 
 

@@ -1,7 +1,24 @@
-import { useState, useCallback, useEffect, useRef } from 'react';
+import { useState, useCallback, useEffect, useRef, useMemo } from 'react';
 import { FileItem, ConversionSettings } from '../types';
-import { DEFAULT_TARGET_FORMATS, getCompatibleTargets, ALL_FORMATS, normalizeFormatExt } from '../lib/formatRegistry';
+import {
+  DEFAULT_TARGET_FORMATS,
+  getCompatibleTargets,
+  ALL_FORMATS,
+  normalizeFormatExt,
+  inferFormatFromMime,
+} from '../lib/formatRegistry';
 import { convertSingleFile, mergeImagesToPdf, downloadBlob } from '../lib/api';
+
+const MAX_CONVERTER_FILE_SIZE = 100 * 1024 * 1024; // 100 MB
+const LEGACY_UNSUPPORTED_EXTS = new Set(['doc', 'ppt', 'xls']);
+
+function isItemConvertible(item: FileItem): boolean {
+  return (
+    item.size > 0 &&
+    item.size <= MAX_CONVERTER_FILE_SIZE &&
+    getCompatibleTargets(item.sourceExt).length > 0
+  );
+}
 
 const BROWSER_PREVIEWABLE_IMAGE_EXTS = new Set([
   'png',
@@ -62,6 +79,8 @@ export function useConversionQueue(
     };
   }, []);
   const [isConvertingAny, setIsConvertingAny] = useState(false);
+  const [isMergingPdf, setIsMergingPdf] = useState(false);
+  const [queueError, setQueueError] = useState<string | null>(null);
   const [activePreset, setActivePreset] = useState<{ target: string; label: string; accept?: string } | null>(null);
   const [heroSourceFormat, setHeroSourceFormat] = useState<string>(initialSource);
   const [heroTargetFormat, setHeroTargetFormat] = useState<string>(initialTarget);
@@ -129,9 +148,12 @@ export function useConversionQueue(
   }, [heroSourceFormat, heroTargetFormat, bumpItemGeneration]);
 
   const handleFilesAdded = useCallback((newFiles: File[]) => {
+    setQueueError(null);
     const newItems: FileItem[] = newFiles.map(file => {
       const dotIdx = file.name.lastIndexOf('.');
-      const ext = dotIdx > 0 ? file.name.substring(dotIdx + 1).toLowerCase() : '';
+      const rawExt = dotIdx > 0 ? file.name.substring(dotIdx + 1).toLowerCase().trim() : '';
+      const inferredMimeExt = !rawExt ? inferFormatFromMime(file.type) : '';
+      const ext = rawExt || inferredMimeExt;
       const normExt = ext ? normalizeFormatExt(ext) : '';
       const nonRenderableByImgTag =
         ['heic', 'heif', 'tiff', 'tif', 'psd', 'tga'].includes(ext) ||
@@ -141,8 +163,10 @@ export function useConversionQueue(
         (BROWSER_PREVIEWABLE_IMAGE_EXTS.has(ext) || file.type.startsWith('image/'));
 
       const effectiveSource = normExt || defaultSourceExt || 'bin';
-      const compatible = effectiveSource !== 'bin' ? getCompatibleTargets(effectiveSource) : ALL_FORMATS.filter(f => f.ext !== 'psd');
-      const fallbackTarget = DEFAULT_TARGET_FORMATS[effectiveSource] || compatible[0]?.ext || 'webp';
+      const isLegacy = LEGACY_UNSUPPORTED_EXTS.has(normExt || ext);
+      const compatible =
+        effectiveSource !== 'bin' && !isLegacy ? getCompatibleTargets(effectiveSource) : [];
+      const fallbackTarget = DEFAULT_TARGET_FORMATS[effectiveSource] || compatible[0]?.ext || '';
 
       const pickCompatibleOrFallback = (preferred?: string) => {
         if (!preferred) return fallbackTarget;
@@ -156,25 +180,41 @@ export function useConversionQueue(
         ? pickCompatibleOrFallback(activePreset.target)
         : pickCompatibleOrFallback(heroTargetFormat);
 
+      let validationError: string | undefined;
+      if (file.size === 0) {
+        validationError = 'Cannot convert an empty (0 byte) file.';
+      } else if (file.size > MAX_CONVERTER_FILE_SIZE) {
+        validationError = 'File exceeds the 100 MB converter upload limit.';
+      } else if (isLegacy) {
+        validationError = `Legacy .${ext} files are unsupported. Please re-save as .${ext}x.`;
+      } else if (compatible.length === 0) {
+        validationError =
+          effectiveSource === 'bin'
+            ? 'Unrecognized file format. Please check the file extension.'
+            : `Unsupported source format (.${effectiveSource}).`;
+      }
+
       return {
         id: Math.random().toString(36).substring(2, 9) + Date.now().toString(36),
         file,
         name: file.name,
         size: file.size,
         sourceExt: ext || defaultSourceExt || 'bin',
-        targetFormat: targetFmt,
+        targetFormat: targetFmt || 'webp',
         previewUrl: isImg ? URL.createObjectURL(file) : undefined,
-        status: 'idle',
+        status: validationError ? 'error' : 'idle',
         progress: 0,
+        errorMessage: validationError,
         settings: { ...DEFAULT_CONVERSION_SETTINGS },
       };
     });
 
-    if (newItems.length > 0 && filesRef.current.length === 0) {
-      const firstNorm = normalizeFormatExt(newItems[0].sourceExt);
+    const firstValid = newItems.find(isItemConvertible);
+    if (firstValid && filesRef.current.length === 0) {
+      const firstNorm = normalizeFormatExt(firstValid.sourceExt);
       if (ALL_FORMATS.some(f => f.ext === firstNorm)) {
         setHeroSourceFormat(firstNorm);
-        setHeroTargetFormat(newItems[0].targetFormat);
+        setHeroTargetFormat(firstValid.targetFormat);
       }
     }
 
@@ -207,10 +247,12 @@ export function useConversionQueue(
 
   const handleSelectAllFormat = useCallback((formatExt: string) => {
     const cleanFmt = normalizeFormatExt(formatExt);
-    setHeroTargetFormat(cleanFmt);
+    if (getCompatibleTargets(heroSourceFormat).some(f => f.ext === cleanFmt)) {
+      setHeroTargetFormat(cleanFmt);
+    }
     setFiles(prev =>
       prev.map(item => {
-        if (item.status === 'converting') return item;
+        if (item.status === 'converting' || !isItemConvertible(item)) return item;
         const compatible = getCompatibleTargets(item.sourceExt);
         if (compatible.some(f => f.ext === cleanFmt)) {
           bumpItemGeneration(item.id);
@@ -227,7 +269,7 @@ export function useConversionQueue(
         return item;
       })
     );
-  }, [bumpItemGeneration]);
+  }, [bumpItemGeneration, heroSourceFormat]);
 
   const handleSaveSettings = useCallback((newSettings: ConversionSettings, applyToAll: boolean = false) => {
     if (applyToAll || isBatchSettingsOpen) {
@@ -362,7 +404,12 @@ export function useConversionQueue(
 
   const handleConvertSingle = async (id: string) => {
     const targetItem = filesRef.current.find(f => f.id === id);
-    if (!targetItem || targetItem.status === 'converting' || inFlightConversionsRef.current.has(id)) {
+    if (
+      !targetItem ||
+      !isItemConvertible(targetItem) ||
+      targetItem.status === 'converting' ||
+      inFlightConversionsRef.current.has(id)
+    ) {
       return;
     }
 
@@ -430,7 +477,9 @@ export function useConversionQueue(
     batchRunningRef.current = true;
     setIsConvertingAny(true);
     try {
-      const pendingItems = filesRef.current.filter(f => f.status === 'idle' || f.status === 'error');
+      const pendingItems = filesRef.current.filter(
+        f => (f.status === 'idle' || f.status === 'error') && isItemConvertible(f)
+      );
       const CONCURRENCY = 3;
       const queue = [...pendingItems];
 
@@ -495,25 +544,39 @@ export function useConversionQueue(
       const zipBlob = await zip.generateAsync({ type: 'blob' });
       downloadBlob(zipBlob, zipFileName);
     } catch {
-      alert("Failed to create ZIP archive.");
+      setQueueError('Failed to create ZIP archive.');
     }
   };
 
   const handleMergeToPdf = async () => {
-    if (isConvertingAny || files.length === 0) return;
-    const imageFiles = files.map(f => f.file);
-    setIsConvertingAny(true);
+    if (isConvertingAny || isMergingPdf || files.length === 0) return;
+    setQueueError(null);
+    const imageFiles = files.filter(f => f.size > 0 && f.size <= MAX_CONVERTER_FILE_SIZE).map(f => f.file);
+    if (imageFiles.length === 0) {
+      setQueueError('No valid images in queue to merge.');
+      return;
+    }
+    setIsMergingPdf(true);
     try {
       const res = await mergeImagesToPdf(imageFiles, 'combined_document.pdf');
       downloadBlob(res.blob, res.fileName);
     } catch (err: unknown) {
-      alert(`Merge failed: ${err instanceof Error ? err.message : 'Merge error'}`);
+      setQueueError(`Merge failed: ${err instanceof Error ? err.message : 'Merge error'}`);
     } finally {
-      if (!batchRunningRef.current && inFlightConversionsRef.current.size === 0) {
-        setIsConvertingAny(false);
-      }
+      setIsMergingPdf(false);
     }
   };
+
+  const batchAllowedTargets = useMemo(() => {
+    const valid = files.filter(isItemConvertible);
+    if (valid.length === 0) return [];
+    let common = getCompatibleTargets(valid[0].sourceExt).map(f => f.ext);
+    for (let i = 1; i < valid.length; i++) {
+      const allowedSet = new Set(getCompatibleTargets(valid[i].sourceExt).map(f => f.ext));
+      common = common.filter(ext => allowedSet.has(ext));
+    }
+    return common;
+  }, [files]);
 
   const activeFormatFile = files.find(f => f.id === activeFormatFileId);
   const activeSettingsFile = files.find(f => f.id === activeSettingsFileId);
@@ -522,6 +585,10 @@ export function useConversionQueue(
     files,
     setFiles,
     isConvertingAny,
+    isMergingPdf,
+    queueError,
+    setQueueError,
+    batchAllowedTargets,
     activePreset,
     setActivePreset,
     activeFormatFileId,

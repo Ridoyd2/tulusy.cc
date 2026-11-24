@@ -87,8 +87,8 @@ async def load_test_endpoint(request: Request, req: LoadTestRequest):
         raise HTTPException(
             status_code=403,
             detail=(
-                "Direct server outbound connections are disabled to protect the VPS origin IP. "
-                "Run in Client Browser Mode, or enable Cloudflare WARP (`warp-cli mode proxy`) / `CF_WORKER_RELAY_URL` on the server."
+                "Server-side relay is unavailable on this node. "
+                "Switch to Client Browser Mode to run benchmarks directly from your browser."
             ),
         )
 
@@ -115,7 +115,8 @@ async def my_ip_endpoint(request: Request, ip: Optional[str] = Query(None, descr
     Detects caller public IP address (or inspects a specified IP), geolocation, ISP, ASN, and client headers.
     """
     try:
-        if ip and ip.strip():
+        is_self = not bool(ip and ip.strip())
+        if not is_self:
             candidate = _extract_valid_ip_candidate(ip)
             if not candidate:
                 raise HTTPException(status_code=400, detail=f"Invalid IP address format: '{ip.strip()}'")
@@ -133,7 +134,7 @@ async def my_ip_endpoint(request: Request, ip: Optional[str] = Query(None, descr
         user_agent = request.headers.get("user-agent", "Unknown Browser")
         headers_dict = dict(request.headers)
 
-        ip_info = await get_my_ip_details(client_ip, headers_dict, user_agent)
+        ip_info = await get_my_ip_details(client_ip, headers_dict, user_agent, is_self=is_self)
         return ip_info
     except HTTPException:
         raise
@@ -150,10 +151,7 @@ async def da_checker_endpoint(request: Request, req: DaCheckRequest):
     if PROTECT_VPS_IP and _is_public_prod_request(request) and not shield.get("proxied"):
         raise HTTPException(
             status_code=403,
-            detail=(
-                "Direct server outbound connections are disabled to protect the VPS origin IP. "
-                "Enable `CF_WORKER_RELAY_URL`, `OUTBOUND_PROXY_URL`, or Cloudflare WARP (`warp-cli mode proxy`) on the server."
-            ),
+            detail="Outbound edge relay is not currently active on this server. Please try again later.",
         )
 
     try:

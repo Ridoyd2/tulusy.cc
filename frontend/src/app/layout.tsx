@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
+import Script from "next/script";
 import "./globals.css";
 import {
   CONTACT_EMAIL,
@@ -73,7 +74,7 @@ export const metadata: Metadata = {
       "Lightning-fast, privacy-first file conversion and anonymous 5GB file sharing. Convert images, PDFs, Word, PowerPoint, and Excel spreadsheets instantly.",
   },
   twitter: {
-    card: "summary_large_image",
+    card: "summary",
     title: "Tulusy - Universal File Converter & 5GB Drop",
     description: "Fast, privacy-friendly online converter for images, PDFs, documents, and anonymous 5GB file sharing.",
   },
@@ -159,6 +160,17 @@ export default function RootLayout({
       </head>
       <body className="min-h-screen antialiased selection:bg-blue-600 selection:text-white">
         {children}
+        <Script
+          src="https://www.googletagmanager.com/gtm.js?id=GTM-PPZ74F2R"
+          strategy="afterInteractive"
+        />
+        <Script id="gtm-init" strategy="afterInteractive">
+          {`
+            window.dataLayer = window.dataLayer || [];
+            function gtag(){dataLayer.push(arguments);}
+            gtag('js', new Date());
+          `}
+        </Script>
       </body>
     </html>
   );

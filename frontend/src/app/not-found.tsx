@@ -5,7 +5,7 @@ import { Navbar } from '@/components/Navbar';
 import { Footer } from '@/components/Footer';
 
 export const metadata: Metadata = {
-  title: 'Page Not Found',
+  title: { absolute: 'Page Not Found | Tulusy' },
   description: 'The requested page could not be found on Tulusy.',
   robots: {
     index: false,
@@ -14,6 +14,16 @@ export const metadata: Metadata = {
       index: false,
       follow: false,
     },
+  },
+  openGraph: {
+    title: 'Page Not Found | Tulusy',
+    description: 'The requested page could not be found on Tulusy.',
+    type: 'website',
+  },
+  twitter: {
+    card: 'summary',
+    title: 'Page Not Found | Tulusy',
+    description: 'The requested page could not be found on Tulusy.',
   },
 };
 

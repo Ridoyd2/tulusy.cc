@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import Link from 'next/link';
 import {
   Download,
@@ -12,10 +12,12 @@ import {
   CheckCircle2,
   Flame,
   Flag,
-  X
+  X,
+  Infinity as InfinityIcon
 } from 'lucide-react';
 import { Navbar } from '@/components/Navbar';
 import { Footer } from '@/components/Footer';
+import { ScrollToTopOnMount } from '@/components/ScrollToTopOnMount';
 import { getApiBaseUrl } from '@/lib/api';
 import { CONTACT_EMAIL } from '@/lib/site';
 
@@ -27,10 +29,25 @@ interface FileInfo {
   created_at: number;
   expires_at: number;
   downloads_count: number;
+  views_count?: number;
+  last_viewed_at?: number;
+  expiry_mode?: 'fixed' | 'forever_idle_7d';
+  is_forever?: boolean;
   requires_password: boolean;
   is_burn_after_reading: boolean;
   seconds_remaining: number;
 }
+
+// Countdown is anchored to the server's seconds_remaining plus locally elapsed time,
+// so a visitor's skewed device clock can never mark an active file as expired.
+interface CountdownClock {
+  syncedAtMs: number;
+  nowMs: number;
+}
+
+// Dedupes the view beacon per tab (React StrictMode re-runs effects, quick reloads).
+const VIEW_DEDUP_MS = 10_000;
+const recentViewPings = new Map<string, number>();
 
 export const FileDownloadClient: React.FC<{ initialFile: FileInfo | null; fileId: string }> = ({
   initialFile,
@@ -50,14 +67,83 @@ export const FileDownloadClient: React.FC<{ initialFile: FileInfo | null; fileId
   const [reportError, setReportError] = useState<string | null>(null);
   const [reportSuccess, setReportSuccess] = useState<boolean>(false);
   const [isReporting, setIsReporting] = useState<boolean>(false);
-  const [nowSec, setNowSec] = useState<number | null>(null);
+  const [clock, setClock] = useState<CountdownClock | null>(null);
+  const reportCloseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const closeReportModal = useCallback(() => {
+    if (reportCloseTimerRef.current) {
+      clearTimeout(reportCloseTimerRef.current);
+      reportCloseTimerRef.current = null;
+    }
+    setShowReportModal(false);
+  }, []);
+
+  const applyServerFile = useCallback((next: FileInfo) => {
+    const syncedAtMs = Date.now();
+    setFile(next);
+    setClock({ syncedAtMs, nowMs: syncedAtMs });
+  }, []);
 
   useEffect(() => {
+    const mountedAtMs = Date.now();
     const timer = setInterval(() => {
-      setNowSec(Math.floor(Date.now() / 1000));
+      const nowMs = Date.now();
+      setClock(prev => (prev ? { ...prev, nowMs } : { syncedAtMs: mountedAtMs, nowMs }));
     }, 15000);
-    return () => clearInterval(timer);
+    return () => {
+      clearInterval(timer);
+      if (reportCloseTimerRef.current) {
+        clearTimeout(reportCloseTimerRef.current);
+      }
+    };
   }, []);
+
+  // Count a human visit (refreshes the 7-day idle window of forever shares).
+  // Skips prerendered pages until they are actually shown; server ignores bots/prefetch.
+  useEffect(() => {
+    const sendViewPing = () => {
+      const now = Date.now();
+      const last = recentViewPings.get(fileId);
+      if (last !== undefined && now - last < VIEW_DEDUP_MS) return;
+      recentViewPings.set(fileId, now);
+
+      const apiUrl = getApiBaseUrl();
+      fetch(`${apiUrl}/api/hosting/view/${encodeURIComponent(fileId)}`, {
+        method: 'POST',
+        cache: 'no-store',
+      })
+        .then(async res => {
+          if (res.status === 404) {
+            setFile(null);
+            setLoadingInfo(false);
+            return;
+          }
+          if (!res.ok) return;
+          const data = (await res.json()) as { file?: FileInfo };
+          if (data.file) {
+            applyServerFile(data.file);
+            setLoadingInfo(false);
+          }
+        })
+        .catch(() => {});
+    };
+
+    const doc = document as Document & { prerendering?: boolean };
+    if (doc.prerendering) {
+      document.addEventListener('prerenderingchange', sendViewPing, { once: true });
+      return () => document.removeEventListener('prerenderingchange', sendViewPing);
+    }
+    sendViewPing();
+  }, [fileId, applyServerFile]);
+
+  useEffect(() => {
+    if (!showReportModal) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') closeReportModal();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [showReportModal, closeReportModal]);
 
   useEffect(() => {
     if (!initialFile) {
@@ -65,12 +151,12 @@ export const FileDownloadClient: React.FC<{ initialFile: FileInfo | null; fileId
       fetch(`${apiUrl}/api/hosting/info/${encodeURIComponent(fileId)}`, { cache: 'no-store' })
         .then(res => (res.ok ? res.json() : null))
         .then(data => {
-          if (data?.file) setFile(data.file);
+          if (data?.file) applyServerFile(data.file as FileInfo);
         })
         .catch(() => {})
         .finally(() => setLoadingInfo(false));
     }
-  }, [initialFile, fileId]);
+  }, [initialFile, fileId, applyServerFile]);
 
   const formatBytes = (bytes: number) => {
     if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';
@@ -116,10 +202,19 @@ export const FileDownloadClient: React.FC<{ initialFile: FileInfo | null; fileId
       }
 
       const contentType = resp.headers.get('content-type');
+      let refreshedExpiry: { expires_at?: number; seconds_remaining?: number } = {};
       if (contentType && contentType.includes('application/json')) {
-        const data = (await resp.json()) as { download_url?: string; filename?: string };
+        const data = (await resp.json()) as {
+          download_url?: string;
+          filename?: string;
+          expires_at?: number | null;
+          seconds_remaining?: number | null;
+        };
         if (!data.download_url) {
           throw new Error('Download URL was missing from server response.');
+        }
+        if (typeof data.expires_at === 'number' && typeof data.seconds_remaining === 'number') {
+          refreshedExpiry = { expires_at: data.expires_at, seconds_remaining: data.seconds_remaining };
         }
         const resolvedUrl = data.download_url.startsWith('http')
           ? data.download_url
@@ -143,9 +238,25 @@ export const FileDownloadClient: React.FC<{ initialFile: FileInfo | null; fileId
       }
 
       setDownloadSuccess(true);
-      setFile(prev => (prev ? { ...prev, downloads_count: prev.downloads_count + 1 } : prev));
+      setFile(prev =>
+        prev ? { ...prev, ...refreshedExpiry, downloads_count: prev.downloads_count + 1 } : prev
+      );
+      if (refreshedExpiry.seconds_remaining !== undefined) {
+        const syncedAtMs = Date.now();
+        setClock({ syncedAtMs, nowMs: syncedAtMs });
+      }
       if (file.is_burn_after_reading) {
         setBurnedAfterDownload(true);
+        try {
+          const raw = window.localStorage.getItem('tulusy_recent_shares');
+          if (raw) {
+            const parsed = JSON.parse(raw);
+            if (Array.isArray(parsed)) {
+              const updated = parsed.filter((s: { fileId?: string }) => s?.fileId !== fileId);
+              window.localStorage.setItem('tulusy_recent_shares', JSON.stringify(updated));
+            }
+          }
+        } catch {}
       }
     } catch (err: unknown) {
       setErrorMessage(err instanceof Error ? err.message : 'Error downloading file.');
@@ -182,7 +293,11 @@ export const FileDownloadClient: React.FC<{ initialFile: FileInfo | null; fileId
         throw new Error(msg);
       }
       setReportSuccess(true);
-      setTimeout(() => {
+      if (reportCloseTimerRef.current) {
+        clearTimeout(reportCloseTimerRef.current);
+      }
+      reportCloseTimerRef.current = setTimeout(() => {
+        reportCloseTimerRef.current = null;
         setShowReportModal(false);
         setReportSuccess(false);
         setReportReason('');
@@ -195,11 +310,11 @@ export const FileDownloadClient: React.FC<{ initialFile: FileInfo | null; fileId
     }
   };
 
-  const liveSecondsRemaining = file
-    ? nowSec !== null
-      ? Math.max(0, file.expires_at - nowSec)
-      : file.seconds_remaining
-    : 0;
+  const elapsedSec = clock ? Math.max(0, Math.floor((clock.nowMs - clock.syncedAtMs) / 1000)) : 0;
+  const liveSecondsRemaining = file ? Math.max(0, file.seconds_remaining - elapsedSec) : 0;
+  const isExpired = Boolean(file) && liveSecondsRemaining <= 0;
+  const isForever = Boolean(file?.is_forever);
+  const viewsCount = file?.views_count ?? 0;
 
   const ext = file?.filename.includes('.')
     ? file.filename.split('.').pop()?.toUpperCase() || 'FILE'
@@ -207,6 +322,7 @@ export const FileDownloadClient: React.FC<{ initialFile: FileInfo | null; fileId
 
   return (
     <div className="min-h-screen flex flex-col">
+      <ScrollToTopOnMount />
       <Navbar activeTool="file-host" />
 
       <main className="flex-1 max-w-2xl w-full mx-auto px-4 py-10 sm:py-16 flex flex-col justify-center">
@@ -233,6 +349,11 @@ export const FileDownloadClient: React.FC<{ initialFile: FileInfo | null; fileId
                       <Flame className="w-3 h-3" /> Burn on read
                     </span>
                   )}
+                  {isForever && (
+                    <span className="px-2 py-0.5 rounded bg-blue-50 dark:bg-blue-950/50 border border-blue-200 dark:border-blue-800/60 text-blue-700 dark:text-blue-300 text-[10px] font-medium flex items-center gap-1">
+                      <InfinityIcon className="w-3 h-3" /> Forever (7d idle)
+                    </span>
+                  )}
                   {file.requires_password && (
                     <span className="px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 text-[10px] font-medium flex items-center gap-1">
                       <Lock className="w-3 h-3" /> Password protected
@@ -245,7 +366,7 @@ export const FileDownloadClient: React.FC<{ initialFile: FileInfo | null; fileId
                 </h1>
 
                 <p className="text-xs text-slate-500 dark:text-slate-400 font-mono tabular-nums">
-                  {formatBytes(file.file_size)} · {file.downloads_count} download{file.downloads_count === 1 ? '' : 's'}
+                  {formatBytes(file.file_size)} · {viewsCount} view{viewsCount === 1 ? '' : 's'} · {file.downloads_count} download{file.downloads_count === 1 ? '' : 's'}
                 </p>
               </div>
             </div>
@@ -253,12 +374,22 @@ export const FileDownloadClient: React.FC<{ initialFile: FileInfo | null; fileId
             {/* Metadata Grid */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 text-xs">
               <div className="p-3 rounded-lg bg-slate-50 dark:bg-slate-800/40 border border-slate-200/80 dark:border-slate-800 flex items-center gap-2.5">
-                <Clock className="w-4 h-4 text-slate-400 shrink-0" />
+                {isForever ? (
+                  <InfinityIcon className="w-4 h-4 text-slate-400 shrink-0" />
+                ) : (
+                  <Clock className="w-4 h-4 text-slate-400 shrink-0" />
+                )}
                 <div>
                   <p className="font-medium text-slate-800 dark:text-slate-200 tabular-nums">
-                    {burnedAfterDownload ? 'Purged after download' : formatTimeRemaining(liveSecondsRemaining)}
+                    {burnedAfterDownload
+                      ? 'Purged after download'
+                      : isForever && !isExpired
+                      ? `${formatTimeRemaining(liveSecondsRemaining).replace(' remaining', '')} until idle deletion`
+                      : formatTimeRemaining(liveSecondsRemaining)}
                   </p>
-                  <p className="text-[11px] text-slate-500">Retention window</p>
+                  <p className="text-[11px] text-slate-500">
+                    {isForever ? 'Forever · resets to 7 days on every view' : 'Retention window'}
+                  </p>
                 </div>
               </div>
 
@@ -312,10 +443,10 @@ export const FileDownloadClient: React.FC<{ initialFile: FileInfo | null; fileId
             {/* Primary Download Button */}
             <button
               type="button"
-              disabled={isDownloading || burnedAfterDownload}
+              disabled={isDownloading || burnedAfterDownload || isExpired}
               onClick={handleDownload}
               className={`w-full py-3 rounded-lg font-medium text-xs sm:text-sm transition-colors flex items-center justify-center gap-2 cursor-pointer ${
-                burnedAfterDownload
+                burnedAfterDownload || isExpired
                   ? 'bg-slate-100 dark:bg-slate-800 text-slate-400 dark:text-slate-500 cursor-not-allowed'
                   : isDownloading
                   ? 'bg-slate-800 text-white cursor-wait'
@@ -326,6 +457,8 @@ export const FileDownloadClient: React.FC<{ initialFile: FileInfo | null; fileId
               <span>
                 {burnedAfterDownload
                   ? 'Single-Use File Consumed'
+                  : isExpired
+                  ? 'File Expired'
                   : isDownloading
                   ? 'Preparing Download...'
                   : `Download File (${formatBytes(file.file_size)})`}
@@ -357,11 +490,11 @@ export const FileDownloadClient: React.FC<{ initialFile: FileInfo | null; fileId
               <FileText className="w-6 h-6" />
             </div>
             <div className="space-y-1.5">
-              <h2 className="text-lg sm:text-xl font-semibold text-slate-900 dark:text-white">
+              <h1 className="text-lg sm:text-xl font-semibold text-slate-900 dark:text-white">
                 File Unavailable or Expired
-              </h2>
+              </h1>
               <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400 max-w-md mx-auto leading-relaxed">
-                This file has either reached its automatic expiration window, was configured to self-destruct after a single download, or was deleted by its uploader.
+                This file has either reached its automatic expiration window, gone 7 days without any views (Forever shares), was configured to self-destruct after a single download, or was deleted by its uploader.
               </p>
             </div>
             <div className="pt-2">
@@ -382,20 +515,24 @@ export const FileDownloadClient: React.FC<{ initialFile: FileInfo | null; fileId
       {showReportModal && (
         <div
           className="fixed inset-0 z-50 bg-slate-900/50 dark:bg-black/70 backdrop-blur-xs flex items-center justify-center p-4"
-          onClick={() => setShowReportModal(false)}
+          onClick={closeReportModal}
         >
           <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="report-abuse-title"
             className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl max-w-md w-full p-5 space-y-4 shadow-xl"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between">
-              <h3 className="text-sm font-semibold text-slate-900 dark:text-white flex items-center gap-2">
+              <h2 id="report-abuse-title" className="text-sm font-semibold text-slate-900 dark:text-white flex items-center gap-2">
                 <Flag className="w-4 h-4 text-red-500" />
                 <span>Report File Abuse / DMCA</span>
-              </h3>
+              </h2>
               <button
                 type="button"
-                onClick={() => setShowReportModal(false)}
+                aria-label="Close"
+                onClick={closeReportModal}
                 className="p-1 rounded-md text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer"
               >
                 <X className="w-4 h-4" />
@@ -441,7 +578,7 @@ export const FileDownloadClient: React.FC<{ initialFile: FileInfo | null; fileId
                   type="button"
                   onClick={() => {
                     setReportError(null);
-                    setShowReportModal(false);
+                    closeReportModal();
                   }}
                   className="px-3.5 py-1.5 rounded-lg text-xs font-medium text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
                 >

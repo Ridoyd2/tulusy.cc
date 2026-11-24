@@ -18,11 +18,12 @@ import {
   HardDrive,
   RefreshCw,
   Eye,
-  EyeOff
+  EyeOff,
+  Infinity as InfinityIcon
 } from 'lucide-react';
 import { getApiBaseUrl } from '../lib/api';
 import { SITE_URL } from '../lib/site';
-import { UploadSessionData } from '../types';
+import { HostingExpiryMode, UploadSessionData } from '../types';
 
 const MULTIPART_THRESHOLD_BYTES = 64 * 1024 * 1024;
 const MULTIPART_CONCURRENCY = 3;
@@ -149,13 +150,24 @@ interface UploadResult {
   expiresAt: number;
   expiryLabel: string;
   isBurn: boolean;
+  expiryMode?: HostingExpiryMode;
 }
 
 const RECENT_SHARES_KEY = 'tulusy_recent_shares';
+const BLOCKED_HOSTING_EXTENSIONS = new Set([
+  'exe', 'bat', 'cmd', 'sh', 'bash', 'vbs', 'msi', 'scr', 'com', 'pif',
+  'jar', 'ps1', 'app', 'dmg', 'deb', 'rpm', 'apk',
+]);
 const EMPTY_SHARES: UploadResult[] = [];
 const shareListeners = new Set<() => void>();
 let cachedSharesRaw: string | null = null;
 let cachedSharesList: UploadResult[] = EMPTY_SHARES;
+
+// Forever shares outlive their cached expiresAt whenever they get views; keep them locally
+// (with their delete token) until the server confirms they were purged for inactivity.
+function isShareLocallyActive(item: UploadResult, nowSec: number): boolean {
+  return item.expiryMode === 'forever_idle_7d' || item.expiresAt > nowSec;
+}
 
 function subscribeRecentShares(callback: () => void) {
   shareListeners.add(callback);
@@ -176,8 +188,14 @@ function subscribeRecentShares(callback: () => void) {
 function getRecentSharesSnapshot(): UploadResult[] {
   if (typeof window === 'undefined') return EMPTY_SHARES;
   try {
+    const nowSec = Math.floor(Date.now() / 1000);
     const raw = window.localStorage.getItem(RECENT_SHARES_KEY);
-    if (raw === cachedSharesRaw) return cachedSharesList;
+    if (raw === cachedSharesRaw) {
+      if (cachedSharesList.some(item => !isShareLocallyActive(item, nowSec))) {
+        cachedSharesList = cachedSharesList.filter(item => isShareLocallyActive(item, nowSec));
+      }
+      return cachedSharesList;
+    }
     cachedSharesRaw = raw;
     if (!raw) {
       cachedSharesList = EMPTY_SHARES;
@@ -188,13 +206,12 @@ function getRecentSharesSnapshot(): UploadResult[] {
       cachedSharesList = EMPTY_SHARES;
       return cachedSharesList;
     }
-    const nowSec = Math.floor(Date.now() / 1000);
     cachedSharesList = parsed
       .filter(
         (item): item is UploadResult =>
           Boolean(item?.fileId && item?.deleteToken && item?.shareUrl) &&
           typeof item.expiresAt === 'number' &&
-          item.expiresAt > nowSec
+          isShareLocallyActive(item, nowSec)
       )
       .slice(0, 10);
     return cachedSharesList;
@@ -212,7 +229,7 @@ function saveRecentShares(shares: UploadResult[]) {
   try {
     const nowSec = Math.floor(Date.now() / 1000);
     const active = shares
-      .filter(s => typeof s.expiresAt === 'number' && s.expiresAt > nowSec)
+      .filter(s => typeof s.expiresAt === 'number' && isShareLocallyActive(s, nowSec))
       .slice(0, 10);
     const raw = JSON.stringify(active);
     window.localStorage.setItem(RECENT_SHARES_KEY, raw);
@@ -223,18 +240,20 @@ function saveRecentShares(shares: UploadResult[]) {
 }
 
 type ExpiryChoice =
-  | { id: '7d'; label: '7 Days'; days: 7; hours?: undefined; burn: false }
-  | { id: '3d'; label: '3 Days'; days: 3; hours?: undefined; burn: false }
-  | { id: '24h'; label: '24 Hours'; days: 1; hours?: undefined; burn: false }
-  | { id: '1h'; label: '1 Hour'; days: 1; hours: 1; burn: false }
-  | { id: 'burn'; label: 'Burn on Read'; days: 1; hours?: undefined; burn: true };
+  | { id: '1h'; label: '1 Hour'; days: 1; hours: 1; mode: 'fixed'; burn: false }
+  | { id: '24h'; label: '24 Hours'; days: 1; hours?: undefined; mode: 'fixed'; burn: false }
+  | { id: '3d'; label: '3 Days'; days: 3; hours?: undefined; mode: 'fixed'; burn: false }
+  | { id: '7d'; label: '7 Days'; days: 7; hours?: undefined; mode: 'fixed'; burn: false }
+  | { id: 'forever'; label: 'Forever (7d idle)'; days: 7; hours?: undefined; mode: 'forever_idle_7d'; burn: false }
+  | { id: 'burn'; label: 'Burn on Read'; days: 1; hours?: undefined; mode: 'fixed'; burn: true };
 
 const EXPIRY_OPTIONS: ExpiryChoice[] = [
-  { id: '1h', label: '1 Hour', days: 1, hours: 1, burn: false },
-  { id: '24h', label: '24 Hours', days: 1, burn: false },
-  { id: '3d', label: '3 Days', days: 3, burn: false },
-  { id: '7d', label: '7 Days', days: 7, burn: false },
-  { id: 'burn', label: 'Burn on Read', days: 1, burn: true },
+  { id: '1h', label: '1 Hour', days: 1, hours: 1, mode: 'fixed', burn: false },
+  { id: '24h', label: '24 Hours', days: 1, mode: 'fixed', burn: false },
+  { id: '3d', label: '3 Days', days: 3, mode: 'fixed', burn: false },
+  { id: '7d', label: '7 Days', days: 7, mode: 'fixed', burn: false },
+  { id: 'forever', label: 'Forever (7d idle)', days: 7, mode: 'forever_idle_7d', burn: false },
+  { id: 'burn', label: 'Burn on Read', days: 1, mode: 'fixed', burn: true },
 ];
 
 export const FileHostTool: React.FC = () => {
@@ -275,6 +294,51 @@ export const FileHostTool: React.FC = () => {
     };
   }, []);
 
+  // Revalidate forever shares whose cached expiry passed: refresh it if views kept the link alive,
+  // or drop the entry if the server purged it after 7 idle days.
+  useEffect(() => {
+    const nowSec = Math.floor(Date.now() / 1000);
+    const overdue = getRecentSharesSnapshot().filter(
+      s => s.expiryMode === 'forever_idle_7d' && s.expiresAt <= nowSec
+    );
+    if (overdue.length === 0) return;
+
+    let cancelled = false;
+    const apiUrl = getApiBaseUrl();
+    void (async () => {
+      const updates = new Map<string, number | null>();
+      await Promise.all(
+        overdue.map(async share => {
+          try {
+            const resp = await fetch(`${apiUrl}/api/hosting/info/${encodeURIComponent(share.fileId)}`, {
+              cache: 'no-store',
+            });
+            if (resp.status === 404) {
+              updates.set(share.fileId, null);
+              return;
+            }
+            if (!resp.ok) return;
+            const data = (await resp.json()) as { file?: { expires_at?: number } };
+            if (typeof data.file?.expires_at === 'number') {
+              updates.set(share.fileId, data.file.expires_at);
+            }
+          } catch {}
+        })
+      );
+      if (cancelled || updates.size === 0) return;
+      const next = getRecentSharesSnapshot().flatMap(s => {
+        if (!updates.has(s.fileId)) return [s];
+        const exp = updates.get(s.fileId);
+        return exp == null ? [] : [{ ...s, expiresAt: exp }];
+      });
+      saveRecentShares(next);
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const formatBytes = (bytes: number) => {
     if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';
     if (bytes < 1) return `${bytes.toFixed(2)} B`;
@@ -296,6 +360,12 @@ export const FileHostTool: React.FC = () => {
       setErrorMessage('Cannot upload an empty (0 byte) file.');
       return;
     }
+    const cleanedName = selectedFile.name.trim().replace(/\.+$/, '');
+    const ext = cleanedName.includes('.') ? cleanedName.split('.').pop()?.toLowerCase() || '' : '';
+    if (ext && BLOCKED_HOSTING_EXTENSIONS.has(ext)) {
+      setErrorMessage(`Executable file type (.${ext}) is restricted for security.`);
+      return;
+    }
     setFile(selectedFile);
   };
 
@@ -312,6 +382,7 @@ export const FileHostTool: React.FC = () => {
   const handleStartUpload = async () => {
     if (!file || isUploading) return;
 
+    const chosenExpiry = selectedExpiry;
     const controller = new AbortController();
     uploadAbortRef.current = controller;
 
@@ -333,9 +404,10 @@ export const FileHostTool: React.FC = () => {
           filename: file.name,
           file_size: file.size,
           content_type: file.type || 'application/octet-stream',
-          expiry_days: selectedExpiry.days,
-          expiry_hours: selectedExpiry.hours ?? null,
-          max_downloads: selectedExpiry.burn ? 1 : 0,
+          expiry_days: chosenExpiry.days,
+          expiry_hours: chosenExpiry.hours ?? null,
+          expiry_mode: chosenExpiry.mode,
+          max_downloads: chosenExpiry.burn ? 1 : 0,
           password: password.trim() ? password.trim() : null,
           use_multipart: file.size > MULTIPART_THRESHOLD_BYTES,
         }),
@@ -348,6 +420,16 @@ export const FileHostTool: React.FC = () => {
 
       const initData = (await initResp.json()) as { data: UploadSessionData };
       const session = initData.data;
+      // Forever shares restart their 7-day idle window at confirmation, so prefer the confirmed expiry
+      let confirmedExpiresAt = session.expires_at;
+      const readConfirmedExpiry = async (resp: Response) => {
+        try {
+          const data = (await resp.json()) as { file?: { expires_at?: number } };
+          if (typeof data.file?.expires_at === 'number') {
+            confirmedExpiresAt = data.file.expires_at;
+          }
+        } catch {}
+      };
 
       // 2. Perform direct upload with real-time progress
       setStatusMessage(
@@ -460,6 +542,7 @@ export const FileHostTool: React.FC = () => {
             const errData = (await completeResp.json().catch(() => ({}))) as { detail?: string };
             throw new Error(errData.detail || 'Could not finalize multipart upload');
           }
+          await readConfirmedExpiry(completeResp);
         } catch (mpErr) {
           controller.abort();
           await fetch(`${apiUrl}/api/hosting/abort-multipart/${encodeURIComponent(session.file_id)}`, {
@@ -502,6 +585,7 @@ export const FileHostTool: React.FC = () => {
           const errData = (await confirmResp.json().catch(() => ({}))) as { detail?: string };
           throw new Error(errData.detail || 'Could not verify uploaded file');
         }
+        await readConfirmedExpiry(confirmResp);
       }
 
       const origin = typeof window !== 'undefined' ? window.location.origin : SITE_URL;
@@ -513,9 +597,10 @@ export const FileHostTool: React.FC = () => {
         fileSize: file.size,
         shareUrl,
         deleteToken: session.delete_token,
-        expiresAt: session.expires_at,
-        expiryLabel: selectedExpiry.label,
-        isBurn: selectedExpiry.burn,
+        expiresAt: confirmedExpiresAt,
+        expiryLabel: chosenExpiry.label,
+        isBurn: chosenExpiry.burn,
+        expiryMode: chosenExpiry.mode,
       };
 
       setResult(uploadResult);
@@ -528,9 +613,13 @@ export const FileHostTool: React.FC = () => {
       setFile(null);
       setConfirmDelete(false);
     } catch (err: unknown) {
-      setErrorMessage(
-        err instanceof Error ? err.message : 'An unexpected error occurred during upload.'
-      );
+      if (err instanceof Error && (err.name === 'AbortError' || err.message === 'Upload aborted.')) {
+        setErrorMessage('Upload cancelled.');
+      } else {
+        setErrorMessage(
+          err instanceof Error ? err.message : 'An unexpected error occurred during upload.'
+        );
+      }
     } finally {
       uploadAbortRef.current = null;
       setIsUploading(false);
@@ -597,7 +686,7 @@ export const FileHostTool: React.FC = () => {
           Anonymous File Share
         </h1>
         <p className="text-xs sm:text-sm text-slate-600 dark:text-slate-400 leading-relaxed">
-          Upload files up to <span className="font-semibold text-slate-900 dark:text-white">5 GB</span> backed by Cloudflare R2 object storage. Default 24-hour auto-deletion (configurable up to 7 days), zero account requirements, and no IP logging.
+          Upload files up to <span className="font-semibold text-slate-900 dark:text-white">5 GB</span> backed by Cloudflare R2 object storage. Default 24-hour auto-deletion, fixed windows up to 7 days, or Forever hosting that only deletes a file after 7 days without views. Zero account requirements and no IP logging.
         </p>
       </div>
 
@@ -614,7 +703,7 @@ export const FileHostTool: React.FC = () => {
           <Clock className="w-4 h-4 text-slate-700 dark:text-slate-300 shrink-0" />
           <div>
             <p className="font-semibold text-slate-900 dark:text-white">24h Default</p>
-            <p className="text-[11px] text-slate-500">Auto-delete (up to 7d)</p>
+            <p className="text-[11px] text-slate-500">Up to 7d or Forever</p>
           </div>
         </div>
         <div className="panel rounded-xl p-3 flex items-center gap-2.5">
@@ -639,6 +728,15 @@ export const FileHostTool: React.FC = () => {
           <div className="panel rounded-xl p-5 sm:p-7 space-y-6">
             {/* Dropzone */}
             <div
+              role="button"
+              tabIndex={isUploading ? -1 : 0}
+              aria-disabled={isUploading}
+              onKeyDown={(e) => {
+                if ((e.key === 'Enter' || e.key === ' ') && !isUploading) {
+                  e.preventDefault();
+                  fileInputRef.current?.click();
+                }
+              }}
               onDragOver={(e) => {
                 e.preventDefault();
                 e.stopPropagation();
@@ -647,6 +745,7 @@ export const FileHostTool: React.FC = () => {
               onDragLeave={(e) => {
                 e.preventDefault();
                 e.stopPropagation();
+                if (e.currentTarget.contains(e.relatedTarget as Node)) return;
                 setIsDragging(false);
               }}
               onDrop={handleDrop}
@@ -711,35 +810,43 @@ export const FileHostTool: React.FC = () => {
 
             {/* Configuration Controls */}
             <div className="space-y-4 pt-1">
+              <div className="space-y-2">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
                 <label className="text-xs font-medium text-slate-700 dark:text-slate-300 flex items-center gap-1.5">
                   <Clock className="w-3.5 h-3.5 text-slate-400" />
                   <span>Expire After</span>
                 </label>
 
-                <div className="grid grid-cols-3 sm:flex sm:flex-wrap items-center gap-1.5 w-full sm:w-auto">
+                <div className="grid grid-cols-2 sm:flex sm:flex-wrap sm:justify-end items-center gap-1.5 w-full sm:w-auto">
                   {EXPIRY_OPTIONS.map((opt) => {
                     const isSelected = selectedExpiry.id === opt.id;
-                    const isBurn = opt.burn;
                     return (
                       <button
                         key={opt.id}
                         type="button"
+                        disabled={isUploading}
+                        aria-pressed={isSelected}
                         onClick={() => setSelectedExpiry(opt)}
-                        className={`px-2.5 sm:px-3 py-1.5 rounded-lg text-xs font-medium transition-colors cursor-pointer flex items-center justify-center gap-1 ${
-                          isBurn ? 'col-span-2 sm:col-span-1' : 'col-span-1'
-                        } ${
+                        className={`px-2.5 sm:px-3 py-1.5 rounded-lg text-xs font-medium transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-1 min-w-0 ${
                           isSelected
                             ? 'bg-slate-900 text-white dark:bg-white dark:text-slate-900 shadow-2xs'
                             : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700'
                         }`}
                       >
                         {opt.burn && <Flame className="w-3 h-3 shrink-0" />}
+                        {opt.mode === 'forever_idle_7d' && <InfinityIcon className="w-3 h-3 shrink-0" />}
                         <span className="truncate">{opt.label}</span>
                       </button>
                     );
                   })}
                 </div>
+              </div>
+
+              {selectedExpiry.mode === 'forever_idle_7d' && (
+                <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed sm:text-right">
+                  Stays hosted forever while people use the link. It is deleted automatically only after 7 days in a row with no views or downloads.
+                </p>
+              )}
               </div>
 
               {/* Password Protection */}
@@ -757,8 +864,9 @@ export const FileHostTool: React.FC = () => {
                     type={showPassword ? 'text' : 'password'}
                     placeholder="Optional password"
                     value={password}
+                    disabled={isUploading}
                     onChange={(e) => setPassword(e.target.value)}
-                    className="w-full pl-3 pr-8 py-1.5 rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-xs text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:border-blue-600"
+                    className="w-full pl-3 pr-8 py-1.5 rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-xs text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:border-blue-600 disabled:opacity-50"
                   />
                   {password && (
                     <button
@@ -777,12 +885,21 @@ export const FileHostTool: React.FC = () => {
             {/* Upload Progress */}
             {isUploading && (
               <div className="space-y-2 p-4 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-800">
-                <div className="flex items-center justify-between text-xs font-medium text-slate-700 dark:text-slate-300">
-                  <span className="flex items-center gap-2">
-                    <RefreshCw className="w-3.5 h-3.5 animate-spin text-blue-600" />
-                    <span>{statusMessage}</span>
+                <div className="flex items-center justify-between gap-2 text-xs font-medium text-slate-700 dark:text-slate-300">
+                  <span className="flex items-center gap-2 min-w-0">
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin text-blue-600 shrink-0" />
+                    <span className="truncate">{statusMessage}</span>
                   </span>
-                  <span className="font-mono tabular-nums">{progress}%</span>
+                  <div className="flex items-center gap-2.5 shrink-0">
+                    <span className="font-mono tabular-nums">{progress}%</span>
+                    <button
+                      type="button"
+                      onClick={() => uploadAbortRef.current?.abort()}
+                      className="px-2 py-0.5 rounded bg-red-50 hover:bg-red-100 dark:bg-red-950/40 dark:hover:bg-red-950/70 border border-red-200 dark:border-red-900/60 text-red-700 dark:text-red-300 text-[11px] font-medium transition-colors cursor-pointer"
+                    >
+                      Cancel
+                    </button>
+                  </div>
                 </div>
 
                 <div className="w-full h-1.5 rounded-full bg-slate-200 dark:bg-slate-700 overflow-hidden">
@@ -806,14 +923,14 @@ export const FileHostTool: React.FC = () => {
               type="button"
               disabled={!file || isUploading}
               onClick={handleStartUpload}
-              className={`w-full py-3 rounded-lg font-medium text-xs sm:text-sm transition-colors flex items-center justify-center gap-2 cursor-pointer ${
+              className={`w-full px-4 py-3 rounded-lg font-medium text-xs sm:text-sm transition-colors flex items-center justify-center gap-2 cursor-pointer ${
                 !file || isUploading
                   ? 'bg-slate-100 dark:bg-slate-800 text-slate-400 dark:text-slate-500 cursor-not-allowed'
                   : 'bg-slate-900 hover:bg-slate-800 dark:bg-white dark:hover:bg-slate-100 text-white dark:text-slate-900'
               }`}
             >
-              <HardDriveUpload className="w-4 h-4" />
-              <span>
+              <HardDriveUpload className="w-4 h-4 shrink-0" />
+              <span className="truncate">
                 {isUploading
                   ? 'Uploading...'
                   : file
@@ -835,7 +952,12 @@ export const FileHostTool: React.FC = () => {
                     {result.filename}
                   </h2>
                   <p className="text-xs text-slate-500 dark:text-slate-400 font-mono tabular-nums">
-                    {formatBytes(result.fileSize)} · {result.isBurn ? 'Single-download burn' : `Expires in ${result.expiryLabel}`}
+                    {formatBytes(result.fileSize)} ·{' '}
+                    {result.isBurn
+                      ? 'Single-download burn'
+                      : result.expiryMode === 'forever_idle_7d'
+                      ? 'Forever · deleted after 7 days without views'
+                      : `Expires in ${result.expiryLabel}`}
                   </p>
                 </div>
               </div>
@@ -953,9 +1075,9 @@ export const FileHostTool: React.FC = () => {
         {recentShares.filter(s => s.fileId !== result?.fileId).length > 0 && (
           <div className="mt-5 panel rounded-xl p-4 sm:p-5 space-y-3">
             <div className="flex items-center justify-between">
-              <h3 className="text-xs sm:text-sm font-semibold text-slate-900 dark:text-white">
+              <h2 className="text-xs sm:text-sm font-semibold text-slate-900 dark:text-white">
                 Recent Active Shares (This Browser)
-              </h3>
+              </h2>
               <span className="text-[11px] text-slate-500">
                 Stored locally for quick link &amp; delete access
               </span>
@@ -974,7 +1096,12 @@ export const FileHostTool: React.FC = () => {
                         {share.filename}
                       </p>
                       <p className="text-[11px] text-slate-500 dark:text-slate-400 font-mono tabular-nums">
-                        {formatBytes(share.fileSize)} · {share.isBurn ? 'Burn on read' : share.expiryLabel}
+                        {formatBytes(share.fileSize)} ·{' '}
+                        {share.isBurn
+                          ? 'Burn on read'
+                          : share.expiryMode === 'forever_idle_7d'
+                          ? 'Forever (7d idle)'
+                          : share.expiryLabel}
                       </p>
                     </div>
 

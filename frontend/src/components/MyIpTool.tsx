@@ -11,7 +11,8 @@ import {
   Clock,
   ExternalLink,
   Terminal,
-  Search
+  Search,
+  Globe
 } from 'lucide-react';
 import { fetchMyIp, measureApiRtt } from '../lib/api';
 import { IpDetailsResult } from '../types';
@@ -59,10 +60,17 @@ export const MyIpTool: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [pingMs, setPingMs] = useState<number | null>(null);
+  const [pingError, setPingError] = useState(false);
   const [isPinging, setIsPinging] = useState(false);
   const requestSeqRef = useRef(0);
   const screenInfo = useSyncExternalStore(subscribeScreen, getScreenSnapshot, getServerScreenSnapshot);
   const cleanAsn = getCleanAsn(ipData?.asn);
+  const hasValidCoords =
+    typeof ipData?.lat === 'number' &&
+    typeof ipData?.lon === 'number' &&
+    Number.isFinite(ipData.lat) &&
+    Number.isFinite(ipData.lon) &&
+    (ipData.lat !== 0 || ipData.lon !== 0);
 
   const loadIpInfo = async (targetIp?: string) => {
     const mySeq = ++requestSeqRef.current;
@@ -85,12 +93,6 @@ export const MyIpTool: React.FC = () => {
   };
 
   useEffect(() => {
-    try {
-      window.scrollTo({ top: 0, left: 0, behavior: 'instant' });
-    } catch {
-      window.scrollTo(0, 0);
-    }
-
     let cancelled = false;
     const mySeq = ++requestSeqRef.current;
     fetchMyIp()
@@ -123,11 +125,13 @@ export const MyIpTool: React.FC = () => {
 
   const handlePingTest = async () => {
     setIsPinging(true);
+    setPingError(false);
     try {
       const rtt = await measureApiRtt();
       setPingMs(rtt);
     } catch {
       setPingMs(null);
+      setPingError(true);
     } finally {
       setIsPinging(false);
     }
@@ -225,12 +229,14 @@ export const MyIpTool: React.FC = () => {
         ) : ipData ? (
           <div className="space-y-3">
             <div className="inline-flex items-center gap-2 px-2.5 py-1 rounded-md bg-slate-100 dark:bg-slate-800 text-xs font-mono text-slate-600 dark:text-slate-300">
-              <span className="px-1.5 py-0.2 rounded bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 font-bold text-[10px]">
+              <span className="px-1.5 py-0.5 rounded bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 font-bold text-[10px]">
                 {ipData.country_code || 'IP'}
               </span>
               <span>{ipData.ip_version}</span>
               <span>·</span>
-              <span className="font-sans">{ipData.city}, {ipData.country}</span>
+              <span className="font-sans">
+                {[ipData.city, ipData.country].filter(v => v && v !== 'Unknown').join(', ') || ipData.country || 'Unknown'}
+              </span>
             </div>
 
             <div className="flex flex-col sm:flex-row items-center justify-center gap-3">
@@ -249,7 +255,7 @@ export const MyIpTool: React.FC = () => {
             </div>
 
             <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400">
-              Network: <strong className="text-slate-800 dark:text-slate-200 font-medium">{ipData.isp}</strong>
+              Network: <strong className="text-slate-800 dark:text-slate-200 font-medium">{ipData.isp || 'Unknown ISP'}</strong>
               {cleanAsn && (
                 <span className="ml-2 font-mono font-semibold text-[11px] px-2 py-0.5 rounded-full bg-blue-50 dark:bg-blue-950/70 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-800/60 shadow-2xs">
                   {cleanAsn}
@@ -261,7 +267,7 @@ export const MyIpTool: React.FC = () => {
       </div>
 
       {/* Details Grid */}
-      {ipData && (
+      {!isLoading && !error && ipData && (
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
           {/* Location Details */}
           <div className="panel p-4 sm:p-5 rounded-xl space-y-3">
@@ -273,7 +279,7 @@ export const MyIpTool: React.FC = () => {
               <div className="flex justify-between items-center pt-1.5">
                 <span className="text-slate-500">Country</span>
                 <span className="font-medium text-slate-900 dark:text-slate-200 truncate max-w-[180px]">
-                  {ipData.country} ({ipData.country_code})
+                  {ipData.country || 'Unknown'}{ipData.country_code ? ` (${ipData.country_code})` : ''}
                 </span>
               </div>
               <div className="flex justify-between items-center pt-1.5">
@@ -290,7 +296,7 @@ export const MyIpTool: React.FC = () => {
               </div>
               <div className="flex justify-between items-center pt-1.5">
                 <span className="text-slate-500">Coordinates</span>
-                {ipData.lat !== 0 || ipData.lon !== 0 ? (
+                {hasValidCoords ? (
                   <a
                     href={`https://www.google.com/maps?q=${ipData.lat},${ipData.lon}`}
                     target="_blank"
@@ -323,20 +329,20 @@ export const MyIpTool: React.FC = () => {
               <div className="flex justify-between items-center pt-1.5">
                 <span className="text-slate-500">Provider</span>
                 <span className="font-medium text-slate-900 dark:text-slate-200 truncate max-w-[180px]">
-                  {ipData.isp}
+                  {ipData.isp || 'Unknown ISP'}
                 </span>
               </div>
               <div className="flex justify-between items-center pt-1.5">
                 <span className="text-slate-500">Organization</span>
                 <span className="font-medium text-slate-900 dark:text-slate-200 truncate max-w-[180px]">
-                  {ipData.org || ipData.isp}
+                  {ipData.org || ipData.isp || 'N/A'}
                 </span>
               </div>
               <div className="flex justify-between items-center pt-1.5">
                 <span className="text-slate-500">Timezone</span>
                 <span className="font-mono text-slate-900 dark:text-slate-200 flex items-center gap-1 truncate max-w-[180px]">
                   <Clock className="w-3 h-3 text-slate-400 shrink-0" />
-                  {ipData.timezone}
+                  {ipData.timezone || 'UTC'}
                 </span>
               </div>
               <div className="flex justify-between items-center pt-1.5">
@@ -348,58 +354,98 @@ export const MyIpTool: React.FC = () => {
             </div>
           </div>
 
-          {/* Client Environment */}
-          <div className="panel p-4 sm:p-5 rounded-xl space-y-3">
-            <h3 className="text-xs sm:text-sm font-semibold text-slate-900 dark:text-white flex items-center gap-1.5">
-              <Monitor className="w-4 h-4 text-slate-400" />
-              Client Telemetry
-            </h3>
-            <div className="space-y-2 text-xs divide-y divide-slate-100 dark:divide-slate-800/80">
-              <div className="flex justify-between items-center pt-1.5">
-                <span className="text-slate-500">Browser</span>
-                <span className="font-medium text-slate-900 dark:text-slate-200">
-                  {ipData.client_browser}
-                </span>
-              </div>
-              <div className="flex justify-between items-center pt-1.5">
-                <span className="text-slate-500">OS Platform</span>
-                <span className="font-medium text-slate-900 dark:text-slate-200">
-                  {ipData.client_os}
-                </span>
-              </div>
-              {screenInfo && (
+          {/* Client Environment (Self) or Lookup Summary (External IP) */}
+          {ipData.is_self === false ? (
+            <div className="panel p-4 sm:p-5 rounded-xl space-y-3">
+              <h3 className="text-xs sm:text-sm font-semibold text-slate-900 dark:text-white flex items-center gap-1.5">
+                <Globe className="w-4 h-4 text-slate-400" />
+                Lookup Summary
+              </h3>
+              <div className="space-y-2 text-xs divide-y divide-slate-100 dark:divide-slate-800/80">
                 <div className="flex justify-between items-center pt-1.5">
-                  <span className="text-slate-500">Viewport</span>
-                  <span className="font-mono text-slate-900 dark:text-slate-200 tabular-nums">
-                    {screenInfo.res} ({screenInfo.depth}-bit)
+                  <span className="text-slate-500">Query Target</span>
+                  <span className="font-medium text-slate-900 dark:text-slate-200">
+                    External Host
                   </span>
                 </div>
-              )}
-              <div className="flex justify-between items-center pt-1.5">
-                <span className="text-slate-500">API RTT</span>
-                <div className="flex items-center gap-2">
-                  {pingMs !== null && (
-                    <span className="font-mono font-semibold text-emerald-600 dark:text-emerald-400 tabular-nums">
-                      {pingMs} ms
-                    </span>
-                  )}
-                  <button
-                    type="button"
-                    onClick={handlePingTest}
-                    disabled={isPinging}
-                    className="px-2 py-0.5 rounded bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-[11px] font-medium text-slate-700 dark:text-slate-300 transition-colors cursor-pointer"
-                  >
-                    {isPinging ? 'Measuring...' : 'Measure'}
-                  </button>
+                <div className="flex justify-between items-center pt-1.5">
+                  <span className="text-slate-500">IP Protocol</span>
+                  <span className="font-mono font-medium text-slate-900 dark:text-slate-200">
+                    {ipData.ip_version}
+                  </span>
+                </div>
+                <div className="flex justify-between items-center pt-1.5">
+                  <span className="text-slate-500">Autonomous System</span>
+                  <span className="font-mono text-slate-900 dark:text-slate-200">
+                    {cleanAsn || 'N/A'}
+                  </span>
+                </div>
+                <div className="flex justify-between items-center pt-1.5">
+                  <span className="text-slate-500">Geo Coordinates</span>
+                  <span className="font-medium text-slate-900 dark:text-slate-200">
+                    {hasValidCoords ? 'Mapped' : 'Unmapped'}
+                  </span>
                 </div>
               </div>
             </div>
-          </div>
+          ) : (
+            <div className="panel p-4 sm:p-5 rounded-xl space-y-3">
+              <h3 className="text-xs sm:text-sm font-semibold text-slate-900 dark:text-white flex items-center gap-1.5">
+                <Monitor className="w-4 h-4 text-slate-400" />
+                Client Telemetry
+              </h3>
+              <div className="space-y-2 text-xs divide-y divide-slate-100 dark:divide-slate-800/80">
+                <div className="flex justify-between items-center pt-1.5">
+                  <span className="text-slate-500">Browser</span>
+                  <span className="font-medium text-slate-900 dark:text-slate-200">
+                    {ipData.client_browser || 'Unknown'}
+                  </span>
+                </div>
+                <div className="flex justify-between items-center pt-1.5">
+                  <span className="text-slate-500">OS Platform</span>
+                  <span className="font-medium text-slate-900 dark:text-slate-200">
+                    {ipData.client_os || 'Unknown'}
+                  </span>
+                </div>
+                {screenInfo && (
+                  <div className="flex justify-between items-center pt-1.5">
+                    <span className="text-slate-500">Display</span>
+                    <span className="font-mono text-slate-900 dark:text-slate-200 tabular-nums">
+                      {screenInfo.res} ({screenInfo.depth}-bit)
+                    </span>
+                  </div>
+                )}
+                <div className="flex justify-between items-center pt-1.5">
+                  <span className="text-slate-500">API RTT</span>
+                  <div className="flex items-center gap-2">
+                    {pingMs !== null && (
+                      <span className="font-mono font-semibold text-emerald-600 dark:text-emerald-400 tabular-nums">
+                        {pingMs} ms
+                      </span>
+                    )}
+                    {pingError && (
+                      <span className="text-[11px] font-medium text-red-500 dark:text-red-400">
+                        Failed
+                      </span>
+                    )}
+                    <button
+                      type="button"
+                      onClick={handlePingTest}
+                      disabled={isPinging}
+                      className="px-2 py-0.5 rounded bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-[11px] font-medium text-slate-700 dark:text-slate-300 transition-colors cursor-pointer"
+                    >
+                      {isPinging ? 'Measuring...' : 'Measure'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
       {/* HTTP Request Headers */}
-      {ipData && ipData.headers && (
+      {!isLoading && !error && ipData && ipData.is_self !== false && ipData.headers && Object.keys(ipData.headers).length > 0 && (
         <div className="panel p-4 sm:p-5 rounded-xl space-y-3">
           <h3 className="text-xs sm:text-sm font-semibold text-slate-900 dark:text-white flex items-center gap-1.5">
             <Terminal className="w-4 h-4 text-slate-400" />
@@ -416,8 +462,8 @@ export const MyIpTool: React.FC = () => {
         </div>
       )}
 
-      {/* Skeletons while initial loading to prevent Cumulative Layout Shift */}
-      {isLoading && !ipData && (
+      {/* Skeletons while loading to prevent split-brain UI & Cumulative Layout Shift */}
+      {isLoading && (
         <div className="space-y-3 animate-pulse" aria-hidden="true">
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
             {[1, 2, 3].map(i => (

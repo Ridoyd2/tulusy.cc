@@ -454,6 +454,17 @@ async def run_load_test(
 # 2. WHAT'S MY IP ENGINE
 # ============================================================================
 
+def _safe_float(val: Any) -> float:
+    """Safely coerces coordinates or numeric metadata to a finite float, defaulting to 0.0."""
+    if val is None or isinstance(val, bool):
+        return 0.0
+    try:
+        num = float(val)
+        return num if math.isfinite(num) else 0.0
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def _clean_asn(raw_as: Any) -> str:
     """Normalizes ASN string to clean AS number format (e.g. 'AS13335')."""
     if not raw_as:
@@ -509,60 +520,62 @@ async def get_ip_intel(client_ip: str) -> Dict[str, Any]:
                     data = resp.json()
 
                     if data.get("status") == "success" or "countryCode" in data:
-                        country_code = data.get("countryCode", data.get("country_code", ""))
-                        raw_as = data.get("as", data.get("asn", "N/A"))
+                        country_code = data.get("countryCode") or data.get("country_code") or ""
+                        raw_as = data.get("as") or data.get("asn") or "N/A"
                         return {
-                            "ip": data.get("query", client_ip),
-                            "country": data.get("country", "Unknown"),
+                            "ip": data.get("query") or client_ip,
+                            "country": data.get("country") or "Unknown",
                             "country_code": country_code,
                             "flag": country_code_to_flag(country_code),
-                            "region": data.get("regionName", data.get("region", "")),
-                            "city": data.get("city", "Unknown"),
-                            "postal": data.get("zip", data.get("postal", "N/A")) or "N/A",
-                            "lat": data.get("lat", data.get("latitude", 0.0)),
-                            "lon": data.get("lon", data.get("longitude", 0.0)),
-                            "timezone": data.get("timezone", "UTC"),
-                            "isp": data.get("isp", data.get("org", "Unknown ISP")),
-                            "org": data.get("org", data.get("isp", "")),
+                            "region": data.get("regionName") or data.get("region") or "",
+                            "city": data.get("city") or "",
+                            "postal": (data.get("zip") or data.get("postal") or "N/A") or "N/A",
+                            "lat": _safe_float(data.get("lat") if data.get("lat") is not None else data.get("latitude")),
+                            "lon": _safe_float(data.get("lon") if data.get("lon") is not None else data.get("longitude")),
+                            "timezone": data.get("timezone") or "UTC",
+                            "isp": data.get("isp") or data.get("org") or "Unknown ISP",
+                            "org": data.get("org") or data.get("isp") or "",
                             "asn": _clean_asn(raw_as),
                         }
 
                     if data.get("success") is True:
-                        country_code = data.get("country_code", "")
-                        conn = data.get("connection", {})
-                        raw_asn = conn.get("asn") or data.get("asn", "N/A")
+                        country_code = data.get("country_code") or ""
+                        conn = data.get("connection") or {}
+                        raw_asn = conn.get("asn") or data.get("asn") or "N/A"
+                        tz_raw = data.get("timezone")
+                        tz_val = tz_raw.get("id", "UTC") if isinstance(tz_raw, dict) else (tz_raw or "UTC")
                         return {
-                            "ip": data.get("ip", client_ip),
-                            "country": data.get("country", "Unknown"),
+                            "ip": data.get("ip") or client_ip,
+                            "country": data.get("country") or "Unknown",
                             "country_code": country_code,
                             "flag": country_code_to_flag(country_code),
-                            "region": data.get("region", ""),
-                            "city": data.get("city", "Unknown"),
-                            "postal": data.get("postal", "N/A") or "N/A",
-                            "lat": data.get("latitude", 0.0),
-                            "lon": data.get("longitude", 0.0),
-                            "timezone": data.get("timezone", {}).get("id", "UTC") if isinstance(data.get("timezone"), dict) else data.get("timezone", "UTC"),
-                            "isp": conn.get("isp", data.get("isp", "Unknown")),
-                            "org": conn.get("org", ""),
+                            "region": data.get("region") or "",
+                            "city": data.get("city") or "",
+                            "postal": (data.get("postal") or "N/A") or "N/A",
+                            "lat": _safe_float(data.get("latitude")),
+                            "lon": _safe_float(data.get("longitude")),
+                            "timezone": tz_val or "UTC",
+                            "isp": conn.get("isp") or data.get("isp") or conn.get("org") or "Unknown ISP",
+                            "org": conn.get("org") or conn.get("isp") or "",
                             "asn": _clean_asn(raw_asn),
                         }
 
                     if not data.get("error") and ("country_name" in data or "country_code" in data):
-                        country_code = data.get("country_code", "")
+                        country_code = data.get("country_code") or ""
                         return {
-                            "ip": data.get("ip", client_ip),
-                            "country": data.get("country_name", data.get("country", "Unknown")),
+                            "ip": data.get("ip") or client_ip,
+                            "country": data.get("country_name") or data.get("country") or "Unknown",
                             "country_code": country_code,
                             "flag": country_code_to_flag(country_code),
-                            "region": data.get("region", ""),
-                            "city": data.get("city", "Unknown"),
-                            "postal": data.get("postal", "N/A") or "N/A",
-                            "lat": data.get("latitude", 0.0),
-                            "lon": data.get("longitude", 0.0),
-                            "timezone": data.get("timezone", "UTC"),
-                            "isp": data.get("org", "Unknown ISP"),
-                            "org": data.get("org", ""),
-                            "asn": _clean_asn(data.get("asn", "N/A")),
+                            "region": data.get("region") or "",
+                            "city": data.get("city") or "",
+                            "postal": (data.get("postal") or "N/A") or "N/A",
+                            "lat": _safe_float(data.get("latitude")),
+                            "lon": _safe_float(data.get("longitude")),
+                            "timezone": data.get("timezone") or "UTC",
+                            "isp": data.get("org") or "Unknown ISP",
+                            "org": data.get("org") or "",
+                            "asn": _clean_asn(data.get("asn") or "N/A"),
                         }
             except Exception:
                 continue
@@ -587,7 +600,8 @@ async def get_ip_intel(client_ip: str) -> Dict[str, Any]:
 async def get_my_ip_details(
     raw_ip: str,
     headers: Dict[str, str],
-    user_agent: str
+    user_agent: str,
+    is_self: bool = True,
 ) -> Dict[str, Any]:
     """
     Parses full client IP and network intelligence without blocking the event loop.
@@ -632,14 +646,19 @@ async def get_my_ip_details(
         **geo,
         "ip_version": "IPv6" if ":" in raw_ip else "IPv4",
         "reverse_dns": reverse_dns,
-        "client_browser": browser,
-        "client_os": os_name,
-        "user_agent": user_agent,
-        "headers": {
-            k: v
-            for k, v in headers.items()
-            if k.lower() not in SENSITIVE_INCOMING_HEADERS and not k.lower().startswith("cookie")
-        },
+        "is_self": is_self,
+        "client_browser": browser if is_self else "",
+        "client_os": os_name if is_self else "",
+        "user_agent": user_agent if is_self else "",
+        "headers": (
+            {
+                k: v
+                for k, v in headers.items()
+                if k.lower() not in SENSITIVE_INCOMING_HEADERS and not k.lower().startswith("cookie")
+            }
+            if is_self
+            else {}
+        ),
     }
 
 
@@ -1151,7 +1170,7 @@ async def analyze_website_da(domain_or_url: str) -> Dict[str, Any]:
             "sitemap_xml": sitemap_ok,
             "dns_a_records": dns_records.get("A", []),
             "server_ip": dns_records.get("IP", "N/A"),
-            "encoding": response_headers.get("content-encoding", "identity"),
+            "encoding": response_headers.get("x-original-content-encoding") or response_headers.get("content-encoding") or "none",
         },
         "recommendations": recommendations,
     }

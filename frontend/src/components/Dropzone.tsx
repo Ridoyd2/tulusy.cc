@@ -1,7 +1,7 @@
 'use client';
 
 import React, { forwardRef, useState, useEffect, useImperativeHandle, useRef } from 'react';
-import { UploadCloud, FileUp, Plus } from 'lucide-react';
+import { UploadCloud, FileUp, Plus, X } from 'lucide-react';
 
 export interface DropzoneHandle {
   openPicker: () => void;
@@ -12,6 +12,7 @@ interface DropzoneProps {
   isCompact?: boolean;
   acceptFilter?: string;
   activePresetLabel?: string | null;
+  onClearPreset?: () => void;
 }
 
 export const Dropzone = forwardRef<DropzoneHandle, DropzoneProps>(({
@@ -19,6 +20,7 @@ export const Dropzone = forwardRef<DropzoneHandle, DropzoneProps>(({
   isCompact,
   acceptFilter,
   activePresetLabel,
+  onClearPreset,
 }, ref) => {
   const [isDragOver, setIsDragOver] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -68,6 +70,7 @@ export const Dropzone = forwardRef<DropzoneHandle, DropzoneProps>(({
 
   const handleDragLeave = (e: React.DragEvent) => {
     e.preventDefault();
+    if (e.currentTarget.contains(e.relatedTarget as Node)) return;
     setIsDragOver(false);
   };
 
@@ -89,6 +92,14 @@ export const Dropzone = forwardRef<DropzoneHandle, DropzoneProps>(({
   if (isCompact) {
     return (
       <div
+        role="button"
+        tabIndex={0}
+        onKeyDown={e => {
+          if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) {
+            e.preventDefault();
+            inputRef.current?.click();
+          }
+        }}
         onClick={() => inputRef.current?.click()}
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
@@ -150,8 +161,24 @@ export const Dropzone = forwardRef<DropzoneHandle, DropzoneProps>(({
           <UploadCloud className="w-6 h-6" />
         </div>
 
-        <p className="text-base sm:text-lg font-semibold text-slate-900 dark:text-white mt-4">
-          {activePresetLabel ? `Drop files for ${activePresetLabel}` : 'Drop files here or click to browse'}
+        <p className="text-base sm:text-lg font-semibold text-slate-900 dark:text-white mt-4 flex items-center justify-center gap-2 flex-wrap">
+          <span>
+            {activePresetLabel ? `Drop files for ${activePresetLabel}` : 'Drop files here or click to browse'}
+          </span>
+          {activePresetLabel && onClearPreset && (
+            <button
+              type="button"
+              onClick={e => {
+                e.stopPropagation();
+                onClearPreset();
+              }}
+              aria-label="Clear active preset filter"
+              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium bg-slate-200/80 hover:bg-slate-300 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 transition-colors cursor-pointer"
+            >
+              <span>Reset</span>
+              <X className="w-3 h-3" />
+            </button>
+          )}
         </p>
         <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400 mt-1 leading-relaxed">
           {activePresetLabel

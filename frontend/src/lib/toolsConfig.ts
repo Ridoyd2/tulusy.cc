@@ -46,13 +46,14 @@ export const TOOL_ROUTES: Record<ActiveTool, ToolRouteConfig> = {
     footerLabel: 'File Share (5GB)',
     title: '5GB Anonymous File Share - Encrypted Drop',
     description:
-      'Send files up to 5GB anonymously with zero signup and auto-expiring links. Direct R2 multipart uploads, burn-after-download, and instant delete tokens.',
+      'Send files up to 5GB anonymously with zero signup. Choose fixed expiration (1h to 7d), burn-after-download, or Forever hosting with 7-day inactivity auto-deletion.',
     keywords: [
       '5gb file share',
       'anonymous file upload',
       'send large files free without signup',
       'burn after reading file share',
       'ephemeral file hosting',
+      'forever file sharing',
     ],
     appCategory: 'UtilitiesApplication',
     faqs: [
@@ -62,7 +63,7 @@ export const TOOL_ROUTES: Record<ActiveTool, ToolRouteConfig> = {
       },
       {
         q: 'How long are shared files stored before automatic deletion?',
-        a: 'You can choose an expiration window from 1 hour up to 7 days, or configure download-count limits and burn-after-download using your generated delete token.',
+        a: 'You can choose a fixed expiration window from 1 hour up to 7 days, single-use burn-on-read, or Forever hosting. Forever files stay active indefinitely and are only deleted automatically if the link receives zero views or downloads for 7 consecutive days.',
       },
       {
         q: 'Do you log uploader IP addresses or track recipients?',
@@ -181,7 +182,7 @@ export function buildSeoMetadata({
   description,
   path,
   keywords,
-  card = 'summary_large_image',
+  card = 'summary',
 }: {
   title: string;
   description: string;
@@ -222,6 +223,6 @@ export function buildToolMetadata(toolId: IndexableToolId): Metadata {
     description: tool.description,
     path: tool.href,
     keywords: tool.keywords,
-    card: 'summary_large_image',
+    card: 'summary',
   });
 }

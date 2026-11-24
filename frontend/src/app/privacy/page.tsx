@@ -32,7 +32,7 @@ export default function PrivacyPage() {
           2. Anonymous 5GB File Share
         </h2>
         <p>
-          Shared files are uploaded directly to private Cloudflare R2 object storage and remain accessible only until their configured expiration timestamp or download limit (including burn-after-download). File Share stores zero account profiles or uploader IP addresses in its metadata database; uploaders receive a random delete token in their browser so they can remove files early at any time.
+          Shared files are uploaded directly to private Cloudflare R2 object storage. Files remain accessible according to the chosen retention rule: a fixed timer (1 hour to 7 days), single-use burn-on-read, or Forever hosting (which remains active indefinitely and is automatically deleted only after 7 consecutive days with zero views or downloads). File Share stores zero account profiles and zero uploader or viewer IP addresses; uploaders receive a private delete token to remove files early at any time.
         </p>
       </section>
 

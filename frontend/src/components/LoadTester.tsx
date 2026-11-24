@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   Activity,
   Play,
@@ -10,7 +10,8 @@ import {
   Download,
   Clock,
   Layers,
-  Info
+  Info,
+  Square
 } from 'lucide-react';
 import { executeLoadTest, fetchProxyStatus, downloadBlob } from '../lib/api';
 import { LoadTestRequestResult, LoadTestResult, ProxyStatus } from '../types';
@@ -20,14 +21,20 @@ export const LoadTester: React.FC = () => {
   const [requestsCount, setRequestsCount] = useState(25);
   const [concurrency, setConcurrency] = useState(5);
   const [method, setMethod] = useState('GET');
+  const [payload, setPayload] = useState('');
   const [executionMode, setExecutionMode] = useState<'browser' | 'edge'>('browser');
   const [proxyStatus, setProxyStatus] = useState<ProxyStatus | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [results, setResults] = useState<LoadTestResult | null>(null);
+  const [hoveredReq, setHoveredReq] = useState<LoadTestRequestResult | null>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
     fetchProxyStatus().then(setProxyStatus);
+    return () => {
+      abortControllerRef.current?.abort();
+    };
   }, []);
 
   const applyPreset = (presetUrl: string, reqs: number, conc: number) => {
@@ -36,12 +43,21 @@ export const LoadTester: React.FC = () => {
     setConcurrency(conc);
   };
 
+  const handleStopTest = () => {
+    abortControllerRef.current?.abort();
+  };
+
   const handleStartTest = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
-    if (!url.trim()) return;
+    if (!url.trim() || isLoading) return;
+
+    abortControllerRef.current?.abort();
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
 
     setIsLoading(true);
     setError(null);
+    setHoveredReq(null);
 
     let targetUrl = url.trim();
     if (!targetUrl.startsWith('http://') && !targetUrl.startsWith('https://')) {
@@ -57,16 +73,24 @@ export const LoadTester: React.FC = () => {
         requests_count: requestsCount,
         concurrency: concurrency,
         method: method,
+        payload: (method === 'POST' || method === 'PUT') && payload.trim() ? payload : undefined,
         executionMode: edgeUnavailable ? 'browser' : executionMode,
+        signal: controller.signal,
       });
       if (edgeUnavailable && !data.fallback_notice) {
         data.fallback_notice =
-          'Edge Relay is not configured on the server (CF_WORKER_RELAY_URL / WARP). Executed in Client Browser Mode to protect the server origin IP.';
+          'Edge Relay is currently unavailable on this server. Executed in Client Browser Mode to protect the server origin IP.';
       }
       setResults(data);
     } catch (err: unknown) {
+      if (err instanceof Error && err.name === 'AbortError') {
+        return;
+      }
       setError(err instanceof Error ? err.message : 'Load test execution failed');
     } finally {
+      if (abortControllerRef.current === controller) {
+        abortControllerRef.current = null;
+      }
       setIsLoading(false);
     }
   };
@@ -131,24 +155,58 @@ export const LoadTester: React.FC = () => {
               />
             </div>
 
-            <button
-              type="submit"
-              disabled={isLoading || !url.trim()}
-              className="w-full sm:w-auto px-5 py-2.5 rounded-lg bg-slate-900 hover:bg-slate-800 dark:bg-white dark:hover:bg-slate-100 text-white dark:text-slate-900 font-medium text-xs sm:text-sm flex items-center justify-center gap-2 transition-colors disabled:opacity-50 cursor-pointer shrink-0"
-            >
-              {isLoading ? (
-                <>
-                  <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                  <span>Running Benchmark...</span>
-                </>
-              ) : (
-                <>
-                  <Play className="w-3.5 h-3.5 fill-current" />
-                  <span>Run Benchmark</span>
-                </>
+            <div className="flex items-center gap-2 w-full sm:w-auto shrink-0">
+              <button
+                type="submit"
+                disabled={isLoading || !url.trim()}
+                className="flex-1 sm:flex-none px-5 py-2.5 rounded-lg bg-slate-900 hover:bg-slate-800 dark:bg-white dark:hover:bg-slate-100 text-white dark:text-slate-900 font-medium text-xs sm:text-sm flex items-center justify-center gap-2 transition-colors disabled:opacity-50 cursor-pointer shrink-0"
+              >
+                {isLoading ? (
+                  <>
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                    <span>Running...</span>
+                  </>
+                ) : (
+                  <>
+                    <Play className="w-3.5 h-3.5 fill-current" />
+                    <span>Run Benchmark</span>
+                  </>
+                )}
+              </button>
+
+              {isLoading && (
+                <button
+                  type="button"
+                  onClick={handleStopTest}
+                  className="px-3.5 py-2.5 rounded-lg border border-red-200 dark:border-red-900/60 bg-red-50 hover:bg-red-100 dark:bg-red-950/30 dark:hover:bg-red-950/50 text-red-700 dark:text-red-300 text-xs sm:text-sm font-medium flex items-center justify-center gap-1.5 transition-colors cursor-pointer shrink-0"
+                  aria-label="Stop benchmark"
+                >
+                  <Square className="w-3.5 h-3.5 fill-current" />
+                  <span>Stop</span>
+                </button>
               )}
-            </button>
+            </div>
           </div>
+
+          {(method === 'POST' || method === 'PUT') && (
+            <div className="space-y-1.5">
+              <label
+                htmlFor="load-test-payload"
+                className="text-xs font-medium text-slate-700 dark:text-slate-300"
+              >
+                Request Payload ({method} Body)
+              </label>
+              <textarea
+                id="load-test-payload"
+                rows={3}
+                value={payload}
+                onChange={e => setPayload(e.target.value)}
+                disabled={isLoading}
+                placeholder='{"key": "value"}'
+                className="w-full px-3 py-2 rounded-lg bg-slate-50 dark:bg-slate-800/70 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white placeholder:text-slate-400 text-xs font-mono focus:outline-none focus:border-blue-600"
+              />
+            </div>
+          )}
 
           {/* Sliders: Requests & Concurrency */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
@@ -364,10 +422,10 @@ export const LoadTester: React.FC = () => {
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
             {/* Latency Percentiles */}
             <div className="panel p-4 sm:p-5 rounded-xl space-y-3">
-              <h3 className="text-xs sm:text-sm font-semibold text-slate-900 dark:text-white flex items-center gap-1.5">
+              <h2 className="text-xs sm:text-sm font-semibold text-slate-900 dark:text-white flex items-center gap-1.5">
                 <Clock className="w-4 h-4 text-slate-400" />
                 Latency Distribution
-              </h3>
+              </h2>
               <div className="grid grid-cols-3 gap-2 text-xs font-mono tabular-nums">
                 {[
                   { label: 'p50 (Median)', val: results.latency_stats_ms.median_p50 },
@@ -392,10 +450,10 @@ export const LoadTester: React.FC = () => {
 
             {/* Status Code Distribution */}
             <div className="panel p-4 sm:p-5 rounded-xl space-y-3">
-              <h3 className="text-xs sm:text-sm font-semibold text-slate-900 dark:text-white flex items-center gap-1.5">
+              <h2 className="text-xs sm:text-sm font-semibold text-slate-900 dark:text-white flex items-center gap-1.5">
                 <CheckCircle2 className="w-4 h-4 text-slate-400" />
                 HTTP Status Summary
-              </h3>
+              </h2>
               <div className="grid grid-cols-4 gap-2 text-xs font-mono tabular-nums">
                 <div className="p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/50 border border-slate-200/70 dark:border-slate-800 text-center">
                   <p className="text-[10px] font-sans text-slate-500">2xx</p>
@@ -449,10 +507,22 @@ export const LoadTester: React.FC = () => {
           {/* Per-Request Latency Timeline */}
           <div className="panel p-4 sm:p-5 rounded-xl space-y-3">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-              <h3 className="text-xs sm:text-sm font-semibold text-slate-900 dark:text-white flex items-center gap-1.5">
-                <Activity className="w-4 h-4 text-slate-400" />
-                Request Sequence Waterfall (ms)
-              </h3>
+              <div className="flex flex-wrap items-center gap-2">
+                <h2 className="text-xs sm:text-sm font-semibold text-slate-900 dark:text-white flex items-center gap-1.5">
+                  <Activity className="w-4 h-4 text-slate-400" />
+                  Request Sequence Waterfall (ms)
+                </h2>
+                {hoveredReq && (
+                  <span className="px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-[11px] font-mono text-slate-700 dark:text-slate-200 tabular-nums">
+                    #{hoveredReq.id} · {hoveredReq.duration_ms}ms ·{' '}
+                    {hoveredReq.opaque
+                      ? 'Opaque'
+                      : hoveredReq.status_code > 0
+                      ? `HTTP ${hoveredReq.status_code}`
+                      : hoveredReq.error}
+                  </span>
+                )}
+              </div>
 
               <div className="flex items-center gap-1.5">
                 <button
@@ -487,23 +557,27 @@ export const LoadTester: React.FC = () => {
                       ? 'bg-amber-500'
                       : 'bg-slate-800 dark:bg-slate-200'
                     : 'bg-red-500';
+                  const statusLabel = item.opaque
+                    ? 'Opaque (Reachable)'
+                    : item.status_code > 0
+                    ? `HTTP ${item.status_code}`
+                    : item.error || 'Error';
                   return (
                     <div
                       key={item.id}
-                      className="group relative flex-1 min-w-[5px] max-w-[20px] h-full flex items-end cursor-pointer"
+                      tabIndex={0}
+                      title={`#${item.id}: ${item.duration_ms}ms (${statusLabel})`}
+                      aria-label={`Request ${item.id}: ${item.duration_ms}ms, ${statusLabel}`}
+                      onMouseEnter={() => setHoveredReq(item)}
+                      onMouseLeave={() => setHoveredReq(prev => (prev?.id === item.id ? null : prev))}
+                      onFocus={() => setHoveredReq(item)}
+                      onBlur={() => setHoveredReq(prev => (prev?.id === item.id ? null : prev))}
+                      className="group relative flex-1 min-w-[5px] max-w-[20px] h-full flex items-end cursor-pointer focus:outline-none"
                     >
                       <div
                         style={{ height: `${heightPercent}%` }}
-                        className={`w-full rounded-t-xs transition-opacity group-hover:opacity-75 ${barColor}`}
+                        className={`w-full rounded-t-xs transition-opacity group-hover:opacity-75 group-focus:opacity-75 ${barColor}`}
                       />
-                      <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 hidden group-hover:flex flex-col items-center z-30 pointer-events-none">
-                        <div className="bg-slate-900 text-white text-[10px] font-mono rounded py-1 px-2 whitespace-nowrap shadow-lg border border-slate-700 tabular-nums">
-                          <p>#{item.id}: {item.duration_ms}ms</p>
-                          <p className="text-slate-400">
-                            {item.opaque ? 'Opaque (Reachable)' : item.status_code > 0 ? `HTTP ${item.status_code}` : item.error}
-                          </p>
-                        </div>
-                      </div>
                     </div>
                   );
                 });

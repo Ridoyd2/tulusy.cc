@@ -38,12 +38,43 @@ from app.services.excel_service import (
 router = APIRouter(prefix="/api/convert", tags=["PDF Tools & Universal"])
 
 
+_MIME_EXT_MAP = {
+    "image/png": "png",
+    "image/jpeg": "jpg",
+    "image/jpg": "jpg",
+    "image/webp": "webp",
+    "image/avif": "avif",
+    "image/gif": "gif",
+    "image/bmp": "bmp",
+    "image/tiff": "tiff",
+    "image/heic": "heic",
+    "image/heif": "heic",
+    "image/svg+xml": "svg",
+    "image/x-icon": "ico",
+    "image/vnd.microsoft.icon": "ico",
+    "image/x-tga": "tga",
+    "image/vnd.adobe.photoshop": "psd",
+    "application/pdf": "pdf",
+    "text/plain": "txt",
+    "text/csv": "csv",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation": "pptx",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "xlsx",
+}
+
+
 @router.post("/pdf-to-images")
 async def pdf_to_images_endpoint(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     format: str = Form("png"),
-    dpi: int = Form(300)
+    dpi: int = Form(300),
+    quality: Optional[int] = Form(90),
+    width: Optional[int] = Form(None),
+    height: Optional[int] = Form(None),
+    maintain_aspect_ratio: Optional[bool] = Form(True),
+    grayscale: Optional[bool] = Form(False),
+    bg_color: Optional[str] = Form("#FFFFFF"),
 ):
     """Extracts all pages from a PDF as images, returned as single image (if 1 page) or ZIP archive."""
     task_id, upload_dir, output_dir = create_task_dir()
@@ -55,7 +86,13 @@ async def pdf_to_images_endpoint(
             pdf_path=input_path,
             output_dir=output_dir,
             img_format=target_img_fmt,
-            dpi=dpi
+            dpi=dpi if dpi is not None else 300,
+            quality=quality if quality is not None else 90,
+            width=width,
+            height=height,
+            maintain_aspect_ratio=maintain_aspect_ratio if maintain_aspect_ratio is not None else True,
+            grayscale=grayscale or False,
+            bg_color=bg_color or "#FFFFFF",
         )
 
         if not extracted:
@@ -151,6 +188,13 @@ async def universal_convert_endpoint(
 
         input_path = await save_upload_file(file, upload_dir)
         source_ext = input_path.suffix.lower().lstrip(".")
+        if not source_ext:
+            raw_mime = (file.content_type or "").split(";", 1)[0].strip().lower()
+            source_ext = _MIME_EXT_MAP.get(raw_mime, "")
+            if source_ext:
+                renamed_path = input_path.with_name(f"{input_path.name}.{source_ext}")
+                input_path.rename(renamed_path)
+                input_path = renamed_path
         stem = get_safe_stem(file.filename, "converted_file")
 
         if source_ext in LEGACY_UNSUPPORTED_DOC_FORMATS:
@@ -184,7 +228,17 @@ async def universal_convert_endpoint(
                 media_type = "text/plain"
             elif target_fmt in (WRITABLE_IMAGE_FORMATS - {"pdf"}):
                 extracted = await asyncio.to_thread(
-                    extract_pdf_pages_to_images, input_path, output_dir, img_format=target_fmt, dpi=dpi if dpi is not None else 300
+                    extract_pdf_pages_to_images,
+                    input_path,
+                    output_dir,
+                    img_format=target_fmt,
+                    dpi=dpi if dpi is not None else 300,
+                    quality=quality if quality is not None else 90,
+                    width=width,
+                    height=height,
+                    maintain_aspect_ratio=maintain_aspect_ratio if maintain_aspect_ratio is not None else True,
+                    grayscale=grayscale or False,
+                    bg_color=bg_color or "#FFFFFF",
                 )
                 if not extracted:
                     raise ValueError("No pages found in PDF")
