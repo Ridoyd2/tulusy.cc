@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useSyncExternalStore } from 'react';
+import React, { useEffect, useRef, useSyncExternalStore } from 'react';
 import Link from 'next/link';
 import {
   ArrowLeftRight,
@@ -9,7 +9,8 @@ import {
   Activity,
   Globe,
   ShieldCheck,
-  HardDriveUpload
+  HardDriveUpload,
+  BookOpen
 } from 'lucide-react';
 import { TulusyLogo } from './TulusyLogo';
 import { ActiveTool, TOOL_ROUTES } from '@/lib/toolsConfig';
@@ -33,7 +34,7 @@ function getServerThemeSnapshot(): 'light' | 'dark' | null {
 }
 
 interface NavbarProps {
-  activeTool?: ActiveTool | null;
+  activeTool?: ActiveTool | 'blog' | null;
   onSelectTool?: (tool: ActiveTool) => void;
   onSelectQuickFilter?: (format: string, accept?: string, source?: string) => void;
 }
@@ -44,6 +45,16 @@ export const Navbar: React.FC<NavbarProps> = ({
   onSelectQuickFilter,
 }) => {
   const theme = useSyncExternalStore(subscribeTheme, getThemeSnapshot, getServerThemeSnapshot);
+  const navRef = useRef<HTMLElement>(null);
+
+  useEffect(() => {
+    const nav = navRef.current;
+    if (!nav || nav.scrollWidth <= nav.clientWidth) return;
+    const activeEl = nav.querySelector<HTMLElement>('[data-active="true"]');
+    if (!activeEl) return;
+    const targetLeft = activeEl.offsetLeft - (nav.clientWidth - activeEl.offsetWidth) / 2;
+    nav.scrollTo({ left: Math.max(0, targetLeft), behavior: 'auto' });
+  }, [activeTool]);
 
   const toggleTheme = () => {
     const nextTheme = theme === 'dark' ? 'light' : 'dark';
@@ -86,13 +97,17 @@ export const Navbar: React.FC<NavbarProps> = ({
           </Link>
 
           {/* Navigation Tabs */}
-          <nav className="flex items-center gap-0.5 bg-slate-100/90 dark:bg-slate-900 p-1 rounded-lg border border-slate-200/70 dark:border-slate-800 overflow-x-auto no-scrollbar">
+          <nav
+            ref={navRef}
+            className="flex items-center gap-0.5 bg-slate-100/90 dark:bg-slate-900 p-1 rounded-lg border border-slate-200/70 dark:border-slate-800 overflow-x-auto no-scrollbar"
+          >
             {navTools.map(tool => {
               const isActive = activeTool === tool.id;
               return (
                 <Link
                   key={tool.id}
                   href={tool.href}
+                  data-active={isActive ? 'true' : undefined}
                   onClick={() => onSelectTool?.(tool.id)}
                   className={`px-2.5 sm:px-3 py-1.5 rounded-md flex items-center gap-1.5 text-xs font-medium transition-all cursor-pointer whitespace-nowrap ${
                     isActive
@@ -105,6 +120,18 @@ export const Navbar: React.FC<NavbarProps> = ({
                 </Link>
               );
             })}
+            <Link
+              href="/blog"
+              data-active={activeTool === 'blog' ? 'true' : undefined}
+              className={`px-2.5 sm:px-3 py-1.5 rounded-md flex items-center gap-1.5 text-xs font-medium transition-all cursor-pointer whitespace-nowrap ${
+                activeTool === 'blog'
+                  ? 'bg-white dark:bg-slate-800 text-slate-900 dark:text-white shadow-2xs border border-slate-200/60 dark:border-slate-700/80'
+                  : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
+              }`}
+            >
+              <BookOpen className="w-3.5 h-3.5" />
+              <span>Blog</span>
+            </Link>
           </nav>
 
           {/* Theme Toggle */}

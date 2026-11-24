@@ -1,8 +1,9 @@
 import Link from 'next/link';
-import { ArrowRight, FileCode2, FolderTree, Globe, Wrench } from 'lucide-react';
+import { ArrowRight, BookOpen, FileCode2, FolderTree, Globe, Wrench } from 'lucide-react';
 import { Navbar } from '@/components/Navbar';
 import { Footer } from '@/components/Footer';
 import { ScrollToTopOnMount } from '@/components/ScrollToTopOnMount';
+import { BLOG_POSTS } from '@/lib/blogData';
 import { getConverterDirectoryGroups } from '@/lib/seoData';
 import { safeJsonLd, SITE_ROOT_URL, SITE_URL } from '@/lib/site';
 import { buildSeoMetadata, TOOL_LIST } from '@/lib/toolsConfig';
@@ -110,6 +111,36 @@ export default function HtmlSitemapPage() {
             </div>
           </section>
 
+          {/* Blog & Comparison Guides */}
+          <section className="space-y-4">
+            <div className="border-b border-slate-200 dark:border-slate-800 pb-2.5 flex items-center justify-between gap-3">
+              <h2 className="text-base sm:text-lg font-semibold text-slate-900 dark:text-white flex items-center gap-2">
+                <BookOpen className="w-4 h-4 text-slate-400" />
+                <span>Blog &amp; Comparison Guides</span>
+              </h2>
+              <span className="text-xs font-mono text-slate-500">{BLOG_POSTS.length + 1} URLs</span>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5">
+              <Link
+                href="/blog"
+                className="p-3.5 rounded-xl panel panel-hover flex items-center justify-between gap-2 text-xs font-medium text-slate-800 dark:text-slate-200"
+              >
+                <span>Blog Index (/blog)</span>
+                <ArrowRight className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+              </Link>
+              {BLOG_POSTS.map((post) => (
+                <Link
+                  key={post.slug}
+                  href={`/blog/${post.slug}`}
+                  className="p-3.5 rounded-xl panel panel-hover flex items-center justify-between gap-2 text-xs font-medium text-slate-800 dark:text-slate-200"
+                >
+                  <span className="truncate">{post.shortTitle}</span>
+                  <ArrowRight className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                </Link>
+              ))}
+            </div>
+          </section>
+
           {/* Categorized Converters */}
           {groups.map((group) => (
             <section key={group.id} className="space-y-4">
@@ -177,6 +208,11 @@ export default function HtmlSitemapPage() {
                 <li>
                   <a href="/sitemaps/pages.xml" className="text-blue-600 dark:text-blue-400 hover:underline">
                     /sitemaps/pages.xml (Core &amp; Legal)
+                  </a>
+                </li>
+                <li>
+                  <a href="/sitemaps/blog.xml" className="text-blue-600 dark:text-blue-400 hover:underline">
+                    /sitemaps/blog.xml (Blog &amp; Guides)
                   </a>
                 </li>
                 <li>

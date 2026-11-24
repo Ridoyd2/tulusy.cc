@@ -21,11 +21,19 @@ export const Footer: React.FC<FooterProps> = ({ onSelectTool }) => {
     { href: '/convert', label: 'All Converters →' },
   ];
 
+  const featuredGuides = [
+    { href: '/blog/tulusy-vs-wetransfer-google-drive-mega-mediafire-gofile', label: 'Tulusy vs. Popular Sites' },
+    { href: '/blog/why-tulusy-beats-traditional-file-hosting-services', label: 'Why Tulusy Beats File Hosts' },
+    { href: '/blog/tulusy-vs-email-messaging-apps-usb-airdrop', label: 'vs. Email, Chat & USB' },
+    { href: '/blog/forever-file-hosting-7-day-inactivity-explained', label: 'Forever (7d Idle) Hosting' },
+    { href: '/blog', label: 'All Blog Guides →' },
+  ];
+
   return (
     <footer className="w-full border-t border-slate-200/80 dark:border-slate-800/80 mt-16 bg-white dark:bg-[#090d16] text-slate-600 dark:text-slate-400">
       <div className="max-w-5xl mx-auto px-3 sm:px-6 lg:px-8 py-10 sm:py-12 space-y-8">
-        {/* Main Grid: Brand + Tools + Conversions */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-8">
+        {/* Main Grid: Brand + Tools + Conversions + Guides */}
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-8">
           {/* Brand Column */}
           <div className="col-span-2 space-y-3">
             <div className="flex items-center gap-2.5">
@@ -85,12 +93,34 @@ export const Footer: React.FC<FooterProps> = ({ onSelectTool }) => {
               ))}
             </ul>
           </nav>
+
+          {/* Blog & Guides Column */}
+          <nav aria-label="Blog and Guides" className="col-span-2 sm:col-span-1 space-y-2.5">
+            <p className="text-xs font-semibold uppercase tracking-wider text-slate-900 dark:text-white">
+              Blog &amp; Guides
+            </p>
+            <ul className="space-y-2 text-xs">
+              {featuredGuides.map(g => (
+                <li key={g.href}>
+                  <Link
+                    href={g.href}
+                    className="hover:text-slate-900 dark:hover:text-white transition-colors"
+                  >
+                    {g.label}
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          </nav>
         </div>
 
         {/* Bottom Sub-footer */}
         <div className="pt-6 border-t border-slate-100 dark:border-slate-900 flex flex-col sm:flex-row items-center justify-between gap-3 text-[11px] text-slate-400 dark:text-slate-500">
           <p suppressHydrationWarning>© {new Date().getFullYear()} Tulusy. All rights reserved.</p>
           <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-1">
+            <Link href="/blog" className="hover:text-slate-700 dark:hover:text-slate-300 transition-colors">
+              Blog
+            </Link>
             <Link href="/sitemap" className="hover:text-slate-700 dark:hover:text-slate-300 transition-colors">
               Sitemap
             </Link>

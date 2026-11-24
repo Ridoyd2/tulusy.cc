@@ -158,6 +158,9 @@ const { POPULAR_SEO_PAIRS, getConverterDirectoryGroups } = loadTsModule(
 const { TOOL_ROUTES } = loadTsModule(
   path.join(frontendRoot, 'src', 'lib', 'toolsConfig.ts')
 );
+const { BLOG_POSTS } = loadTsModule(
+  path.join(frontendRoot, 'src', 'lib', 'blogData.ts')
+);
 
 const popularSlugs = new Set(POPULAR_SEO_PAIRS.map((p) => p.slug));
 const seenLocs = new Set();
@@ -180,6 +183,8 @@ const pageSources = {
   contact: ['src/app/contact/page.tsx', 'src/components/LegalPageShell.tsx'],
   privacy: ['src/app/privacy/page.tsx', 'src/components/LegalPageShell.tsx'],
   terms: ['src/app/terms/page.tsx', 'src/components/LegalPageShell.tsx'],
+  blogIndex: ['src/app/blog/page.tsx', 'src/components/BlogIndexClient.tsx', 'src/lib/blogData.ts'],
+  blogArticle: ['src/app/blog/[slug]/page.tsx', 'src/components/BlogArticleView.tsx', 'src/components/BlogDiagrams.tsx', 'src/lib/blogData.ts'],
   converterSlug: [
     'src/app/convert/[slug]/page.tsx',
     'src/app/convert/[slug]/ConvertClient.tsx',
@@ -287,11 +292,34 @@ function buildConverterEntries(pairs, defaultPriority) {
   });
 }
 
+const blogArticleLastMod = getLatestLastMod(pageSources.blogArticle);
+const blogEntries = [
+  {
+    loc: `${SITE_URL}/blog`,
+    lastmod: getLatestLastMod(pageSources.blogIndex),
+    changefreq: 'weekly',
+    priority: '0.85',
+    images: [],
+  },
+  ...BLOG_POSTS.map((post) => ({
+    loc: `${SITE_URL}/blog/${post.slug}`,
+    lastmod: blogArticleLastMod,
+    changefreq: 'monthly',
+    priority: '0.8',
+    images: [],
+  })),
+];
+
 const subSitemaps = [
   {
     filename: 'pages.xml',
     entries: pagesEntries,
     hasImages: true,
+  },
+  {
+    filename: 'blog.xml',
+    entries: blogEntries,
+    hasImages: false,
   },
   {
     filename: 'pdf-converters.xml',
