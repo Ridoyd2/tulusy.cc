@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { ArrowRight, UploadCloud } from 'lucide-react';
 import { Navbar } from './Navbar';
+import { ScrollToTopOnMount } from './ScrollToTopOnMount';
 import { Dropzone, DropzoneHandle } from './Dropzone';
 import { FileQueue } from './FileQueue';
 import { FormatModal } from './FormatModal';
@@ -88,6 +89,7 @@ export const HomeClient: React.FC = () => {
         </div>
       )}
 
+      <ScrollToTopOnMount />
       <Navbar
         activeTool="converter"
         onSelectQuickFilter={(targetFmt, accept, sourceFmt) => {

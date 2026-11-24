@@ -3,6 +3,7 @@ import Link from 'next/link';
 import { ArrowRight } from 'lucide-react';
 import { Navbar } from './Navbar';
 import { Footer } from './Footer';
+import { ScrollToTopOnMount } from './ScrollToTopOnMount';
 import { ToolFaqAccordion } from './ToolFaqAccordion';
 import { getAllSEOSlugs } from '@/lib/seoData';
 import { safeJsonLd, SITE_URL } from '@/lib/site';
@@ -87,9 +88,10 @@ export const ToolPageShell: React.FC<ToolPageShellProps> = ({ toolId, children }
       />
 
       <div className="min-h-screen flex flex-col">
+        <ScrollToTopOnMount />
         <Navbar activeTool={toolId} />
 
-        <main className="flex-1 max-w-5xl w-full mx-auto px-3 sm:px-6 lg:px-8 pt-6 sm:pt-9 pb-12 sm:pb-16 space-y-10">
+        <main className="flex-1 max-w-5xl w-full mx-auto px-3 sm:px-6 lg:px-8 pt-7 sm:pt-10 pb-12 sm:pb-16 space-y-10">
           {children}
 
           <ToolFaqAccordion faqs={tool.faqs} />

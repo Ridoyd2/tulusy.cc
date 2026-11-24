@@ -37,6 +37,21 @@ function getServerScreenSnapshot(): { res: string; depth: number } | null {
   return null;
 }
 
+function getCleanAsn(asn?: string | null): string | null {
+  if (!asn || asn === 'N/A' || asn === 'Local' || asn.toLowerCase() === 'unknown') {
+    return null;
+  }
+  const match = asn.match(/^AS\d+/i);
+  if (match) return match[0].toUpperCase();
+  const numMatch = asn.match(/^\d+/);
+  if (numMatch) return `AS${numMatch[0]}`;
+  const firstWord = asn.split(' ')[0];
+  if (firstWord && firstWord.toUpperCase().startsWith('AS')) {
+    return firstWord.toUpperCase();
+  }
+  return null;
+}
+
 export const MyIpTool: React.FC = () => {
   const [ipData, setIpData] = useState<IpDetailsResult | null>(null);
   const [customIpInput, setCustomIpInput] = useState('');
@@ -47,6 +62,7 @@ export const MyIpTool: React.FC = () => {
   const [isPinging, setIsPinging] = useState(false);
   const requestSeqRef = useRef(0);
   const screenInfo = useSyncExternalStore(subscribeScreen, getScreenSnapshot, getServerScreenSnapshot);
+  const cleanAsn = getCleanAsn(ipData?.asn);
 
   const loadIpInfo = async (targetIp?: string) => {
     const mySeq = ++requestSeqRef.current;
@@ -69,6 +85,12 @@ export const MyIpTool: React.FC = () => {
   };
 
   useEffect(() => {
+    try {
+      window.scrollTo({ top: 0, left: 0, behavior: 'instant' });
+    } catch {
+      window.scrollTo(0, 0);
+    }
+
     let cancelled = false;
     const mySeq = ++requestSeqRef.current;
     fetchMyIp()
@@ -228,9 +250,9 @@ export const MyIpTool: React.FC = () => {
 
             <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400">
               Network: <strong className="text-slate-800 dark:text-slate-200 font-medium">{ipData.isp}</strong>
-              {ipData.asn && ipData.asn !== 'N/A' && (
-                <span className="ml-2 font-mono text-[11px] px-1.5 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300">
-                  {ipData.asn}
+              {cleanAsn && (
+                <span className="ml-2 font-mono font-semibold text-[11px] px-2 py-0.5 rounded-full bg-blue-50 dark:bg-blue-950/70 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-800/60 shadow-2xs">
+                  {cleanAsn}
                 </span>
               )}
             </p>
@@ -292,6 +314,12 @@ export const MyIpTool: React.FC = () => {
               Routing & ASN
             </h3>
             <div className="space-y-2 text-xs divide-y divide-slate-100 dark:divide-slate-800/80">
+              <div className="flex justify-between items-center pt-1.5">
+                <span className="text-slate-500">Autonomous System</span>
+                <span className="font-mono font-semibold text-slate-900 dark:text-slate-200 truncate max-w-[180px]">
+                  {cleanAsn || ipData.asn || 'N/A'}
+                </span>
+              </div>
               <div className="flex justify-between items-center pt-1.5">
                 <span className="text-slate-500">Provider</span>
                 <span className="font-medium text-slate-900 dark:text-slate-200 truncate max-w-[180px]">
@@ -384,6 +412,33 @@ export const MyIpTool: React.FC = () => {
                 <span className="text-slate-200 break-all">{String(val)}</span>
               </div>
             ))}
+          </div>
+        </div>
+      )}
+
+      {/* Skeletons while initial loading to prevent Cumulative Layout Shift */}
+      {isLoading && !ipData && (
+        <div className="space-y-3 animate-pulse" aria-hidden="true">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            {[1, 2, 3].map(i => (
+              <div key={i} className="panel p-4 sm:p-5 rounded-xl space-y-3 min-h-[160px]">
+                <div className="h-4 bg-slate-200 dark:bg-slate-800 rounded w-28" />
+                <div className="space-y-2 pt-2">
+                  <div className="h-3 bg-slate-100 dark:bg-slate-800/60 rounded w-full" />
+                  <div className="h-3 bg-slate-100 dark:bg-slate-800/60 rounded w-5/6" />
+                  <div className="h-3 bg-slate-100 dark:bg-slate-800/60 rounded w-4/6" />
+                  <div className="h-3 bg-slate-100 dark:bg-slate-800/60 rounded w-3/4" />
+                </div>
+              </div>
+            ))}
+          </div>
+          <div className="panel p-4 sm:p-5 rounded-xl space-y-3 min-h-[140px]">
+            <div className="h-4 bg-slate-200 dark:bg-slate-800 rounded w-48" />
+            <div className="h-24 bg-slate-950/60 rounded-lg border border-slate-800/80 p-3 space-y-2">
+              <div className="h-2.5 bg-slate-800 rounded w-3/4" />
+              <div className="h-2.5 bg-slate-800 rounded w-1/2" />
+              <div className="h-2.5 bg-slate-800 rounded w-2/3" />
+            </div>
           </div>
         </div>
       )}

@@ -2,6 +2,7 @@
 
 import React, { useState, useRef } from 'react';
 import { Navbar } from '@/components/Navbar';
+import { ScrollToTopOnMount } from '@/components/ScrollToTopOnMount';
 import { Dropzone, DropzoneHandle } from '@/components/Dropzone';
 import { FileQueue } from '@/components/FileQueue';
 import { FormatModal } from '@/components/FormatModal';
@@ -63,6 +64,7 @@ export const ConvertClient: React.FC<ConvertClientProps> = ({ seoData }) => {
 
   return (
     <div className="min-h-screen flex flex-col">
+      <ScrollToTopOnMount />
       <Navbar activeTool="converter" />
 
       <main className="flex-1 max-w-5xl w-full mx-auto px-3 sm:px-6 lg:px-8 pt-6 sm:pt-10 pb-16 space-y-12">

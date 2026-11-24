@@ -3,6 +3,7 @@ import Link from 'next/link';
 import { ArrowRight } from 'lucide-react';
 import { Navbar } from '@/components/Navbar';
 import { Footer } from '@/components/Footer';
+import { ScrollToTopOnMount } from '@/components/ScrollToTopOnMount';
 import { getConverterDirectoryGroups, getAllSEOSlugs } from '@/lib/seoData';
 import { safeJsonLd, SITE_ROOT_URL, SITE_URL } from '@/lib/site';
 
@@ -94,6 +95,7 @@ export default function ConvertDirectoryPage() {
       />
 
       <div className="min-h-screen flex flex-col">
+        <ScrollToTopOnMount />
         <Navbar activeTool="converter" />
 
         <main className="flex-1 max-w-5xl w-full mx-auto px-3 sm:px-6 lg:px-8 pt-6 sm:pt-9 pb-12 sm:pb-16 space-y-10">

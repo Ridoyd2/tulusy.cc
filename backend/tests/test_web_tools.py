@@ -11,6 +11,7 @@ sys.path.insert(0, str(BASE_DIR))
 
 from app.services.web_tools_service import (
     ANONYMOUS_USER_AGENT,
+    _clean_asn,
     _safe_fetch_with_redirects,
     analyze_website_da,
     get_active_outbound_shield,
@@ -19,7 +20,7 @@ from app.services.web_tools_service import (
     run_load_test,
 )
 
-async def test_suite():
+async def _async_test_suite():
     print("[TEST] Starting Web Tools Automated Test Suite...")
 
     # 1. Test SSRF & Self-Domain Origin Protection
@@ -172,6 +173,14 @@ async def test_suite():
     print("[PASS] Sensitive incoming headers redacted from /my-ip response")
 
     # 8. Test iOS User-Agent OS detection & DA Checker URL case preservation + PROTECT_VPS_IP
+    assert _clean_asn("AS13335 Cloudflare, Inc.") == "AS13335"
+    assert _clean_asn("13335") == "AS13335"
+    assert _clean_asn("AS15169 Google LLC") == "AS15169"
+    assert _clean_asn("Local") == "Local"
+    assert _clean_asn("") == "N/A"
+    assert _clean_asn(None) == "N/A"
+    print("[PASS] ASN normalization verified without organization duplication")
+
     ios_ua = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) CriOS/124.0.0.0 Mobile/15E148 Safari/604.1"
     ios_res = await get_my_ip_details("127.0.0.1", {"user-agent": ios_ua}, ios_ua)
     assert ios_res["client_os"] == "iOS", f"Expected iOS, got {ios_res['client_os']}"
@@ -213,5 +222,8 @@ async def test_suite():
 
     print("\n[SUCCESS] ALL WEB TOOLS TESTS PASSED WITH 100% SUCCESS!\n")
 
+def test_suite():
+    asyncio.run(_async_test_suite())
+
 if __name__ == "__main__":
-    asyncio.run(test_suite())
+    test_suite()

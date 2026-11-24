@@ -454,6 +454,20 @@ async def run_load_test(
 # 2. WHAT'S MY IP ENGINE
 # ============================================================================
 
+def _clean_asn(raw_as: Any) -> str:
+    """Normalizes ASN string to clean AS number format (e.g. 'AS13335')."""
+    if not raw_as:
+        return "N/A"
+    as_str = str(raw_as).strip()
+    if not as_str or as_str.upper() in ("N/A", "NONE", "UNKNOWN"):
+        return "N/A"
+    match = re.match(r"^(AS\d+|\d+)", as_str, re.IGNORECASE)
+    if match:
+        val = match.group(1).upper()
+        return val if val.startswith("AS") else f"AS{val}"
+    return as_str
+
+
 async def get_ip_intel(client_ip: str) -> Dict[str, Any]:
     """
     Fetches geolocation and ASN data with automatic fallback across providers.
@@ -496,6 +510,7 @@ async def get_ip_intel(client_ip: str) -> Dict[str, Any]:
 
                     if data.get("status") == "success" or "countryCode" in data:
                         country_code = data.get("countryCode", data.get("country_code", ""))
+                        raw_as = data.get("as", data.get("asn", "N/A"))
                         return {
                             "ip": data.get("query", client_ip),
                             "country": data.get("country", "Unknown"),
@@ -509,12 +524,13 @@ async def get_ip_intel(client_ip: str) -> Dict[str, Any]:
                             "timezone": data.get("timezone", "UTC"),
                             "isp": data.get("isp", data.get("org", "Unknown ISP")),
                             "org": data.get("org", data.get("isp", "")),
-                            "asn": data.get("as", data.get("asn", "N/A")),
+                            "asn": _clean_asn(raw_as),
                         }
 
                     if data.get("success") is True:
                         country_code = data.get("country_code", "")
                         conn = data.get("connection", {})
+                        raw_asn = conn.get("asn") or data.get("asn", "N/A")
                         return {
                             "ip": data.get("ip", client_ip),
                             "country": data.get("country", "Unknown"),
@@ -528,7 +544,7 @@ async def get_ip_intel(client_ip: str) -> Dict[str, Any]:
                             "timezone": data.get("timezone", {}).get("id", "UTC") if isinstance(data.get("timezone"), dict) else data.get("timezone", "UTC"),
                             "isp": conn.get("isp", data.get("isp", "Unknown")),
                             "org": conn.get("org", ""),
-                            "asn": f"AS{conn.get('asn', '')} {conn.get('org', '')}".strip(),
+                            "asn": _clean_asn(raw_asn),
                         }
 
                     if not data.get("error") and ("country_name" in data or "country_code" in data):
@@ -546,7 +562,7 @@ async def get_ip_intel(client_ip: str) -> Dict[str, Any]:
                             "timezone": data.get("timezone", "UTC"),
                             "isp": data.get("org", "Unknown ISP"),
                             "org": data.get("org", ""),
-                            "asn": data.get("asn", "N/A"),
+                            "asn": _clean_asn(data.get("asn", "N/A")),
                         }
             except Exception:
                 continue

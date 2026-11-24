@@ -2,6 +2,7 @@ import React from 'react';
 import Link from 'next/link';
 import { Navbar } from './Navbar';
 import { Footer } from './Footer';
+import { ScrollToTopOnMount } from './ScrollToTopOnMount';
 import { safeJsonLd, SITE_URL } from '@/lib/site';
 
 interface LegalPageShellProps {
@@ -47,6 +48,7 @@ export const LegalPageShell: React.FC<LegalPageShellProps> = ({
       />
 
       <div className="min-h-screen flex flex-col">
+        <ScrollToTopOnMount />
         <Navbar activeTool={null} />
 
         <main className="flex-1 max-w-4xl w-full mx-auto px-3 sm:px-6 lg:px-8 pt-6 sm:pt-10 pb-14 sm:pb-16 space-y-8">
