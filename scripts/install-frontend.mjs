@@ -6,7 +6,29 @@ import { fileURLToPath } from 'node:url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
 const frontendDir = path.join(rootDir, 'frontend');
-const oxideWasiDir = path.join(frontendDir, 'node_modules', '@tailwindcss', 'oxide-wasm32-wasi');
+const nodeModulesDir = path.join(frontendDir, 'node_modules');
+const cleanMarker = path.join(nodeModulesDir, '.tulusy-clean-v1');
+const rootLockfile = path.join(rootDir, 'package-lock.json');
+const oxideWasiDir = path.join(nodeModulesDir, '@tailwindcss', 'oxide-wasm32-wasi');
+
+// Remove stray root package-lock.json so Next.js doesn't infer the wrong workspace root
+try {
+  if (fs.existsSync(rootLockfile)) {
+    fs.unlinkSync(rootLockfile);
+  }
+} catch {
+  // Ignore
+}
+
+// Perform a one-time clean wipe if node_modules hasn't been cleanly installed with this marker
+if (fs.existsSync(nodeModulesDir) && !fs.existsSync(cleanMarker)) {
+  console.log('[install-frontend] Performing one-time clean reset of frontend/node_modules...');
+  try {
+    fs.rmSync(nodeModulesDir, { recursive: true, force: true });
+  } catch (cleanErr) {
+    console.warn('[install-frontend] Could not fully wipe node_modules:', cleanErr.message);
+  }
+}
 
 // Clear out any dangling symlink or broken path that causes npm's Arborist ENOENT lstat crashes
 try {
@@ -15,10 +37,10 @@ try {
     fs.unlinkSync(oxideWasiDir);
   }
 } catch {
-  // Path does not exist yet or cannot be lstated
+  // Path does not exist yet
 }
 
-// Ensure the directory exists so npm's Arborist find/lstat succeeds cleanly
+// Ensure the directory exists so npm's Arborist lstat succeeds cleanly
 try {
   fs.mkdirSync(oxideWasiDir, { recursive: true });
 } catch {
@@ -33,29 +55,37 @@ try {
     stdio: 'inherit',
     env: process.env,
   });
+  try {
+    fs.mkdirSync(nodeModulesDir, { recursive: true });
+    fs.writeFileSync(cleanMarker, 'ok\n');
+  } catch {
+    // Ignore marker write failure
+  }
   console.log('[install-frontend] Frontend dependencies installed successfully.');
 } catch (err) {
-  console.warn('[install-frontend] Standard install failed. Cleaning @tailwindcss optional cache and retrying...');
+  console.warn('[install-frontend] Standard install failed. Cleaning frontend/node_modules and retrying...');
 
-  // Clean potentially broken optional platform bindings
   try {
-    const tailwindDir = path.join(frontendDir, 'node_modules', '@tailwindcss');
-    if (fs.existsSync(tailwindDir)) {
-      fs.rmSync(tailwindDir, { recursive: true, force: true });
+    if (fs.existsSync(nodeModulesDir)) {
+      fs.rmSync(nodeModulesDir, { recursive: true, force: true });
     }
-    // Re-create dummy wasi dir
     fs.mkdirSync(oxideWasiDir, { recursive: true });
   } catch (cleanErr) {
     console.warn('[install-frontend] Cleanup warning:', cleanErr.message);
   }
 
-  // Retry install
   try {
     execSync('npm install --include=dev --no-audit --no-fund', {
       cwd: frontendDir,
       stdio: 'inherit',
       env: process.env,
     });
+    try {
+      fs.mkdirSync(nodeModulesDir, { recursive: true });
+      fs.writeFileSync(cleanMarker, 'ok\n');
+    } catch {
+      // Ignore
+    }
     console.log('[install-frontend] Frontend dependencies installed successfully on retry.');
   } catch (retryErr) {
     console.error('[install-frontend] Retry failed:', retryErr);
