@@ -7,9 +7,9 @@ import { BLOG_POSTS } from '@/lib/blogData';
 import { safeJsonLd, SITE_ROOT_URL, SITE_URL } from '@/lib/site';
 import { buildSeoMetadata } from '@/lib/toolsConfig';
 
-const blogTitle = 'Tulusy Blog - Why Tulusy Beats Traditional File Hosting';
+const blogTitle = 'Tulusy Blog - File Converter Guides & Anonymous Sharing';
 const blogDescription =
-  'Deep dives and honest comparisons showing why Tulusy File Share outperforms legacy file hosts, email attachments, chat apps, and cloud drives with 5GB uploads, Forever (7d idle) hosting, and zero IP tracking.';
+  'Practical guides to JPEG XL, Camera RAW (CR2/CR3/NEF/ARW/DNG), Markdown, EPUB, JSON/YAML/XML conversions, plus 5GB anonymous file sharing without quotas or IP tracking.';
 
 export const metadata = buildSeoMetadata({
   title: blogTitle,
@@ -17,10 +17,10 @@ export const metadata = buildSeoMetadata({
   path: '/blog',
   keywords: [
     'tulusy blog',
+    'jpeg xl avif webp guide',
+    'camera raw cr3 nef dng converter guide',
+    'markdown epub json yaml converter',
     'best free file hosting service',
-    'tulusy vs cloud drives',
-    'forever 7 day idle file hosting',
-    'send large files without signup',
     'anonymous 5gb file transfer',
   ],
   card: 'summary',
@@ -100,7 +100,7 @@ export default function BlogIndexPage() {
               Blog
             </h1>
             <p className="text-sm sm:text-base text-slate-600 dark:text-slate-400 leading-relaxed">
-              Quick reads on sending big files without signups, blurry compression, or dead links.
+              Practical guides on modern image &amp; Camera RAW formats, markup &amp; data conversions, and sending big files without signups or dead links.
             </p>
           </header>
 

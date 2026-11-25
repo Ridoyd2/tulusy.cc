@@ -1,13 +1,18 @@
 import React from 'react';
 import {
+  ArrowLeftRight,
   ArrowRight,
   Ban,
   Bot,
+  Camera,
   Check,
   Clock,
+  Code2,
   EyeOff,
+  FileCode2,
   FileWarning,
   HardDrive,
+  Image as ImageIcon,
   Infinity as InfinityIcon,
   Layers,
   Lock,
@@ -24,7 +29,10 @@ export type BlogDiagramId =
   | 'everyday-ways'
   | 'forever-timeline'
   | 'privacy-comparison'
-  | 'multipart-pipeline';
+  | 'multipart-pipeline'
+  | 'modern-image-formats'
+  | 'camera-raw-pipeline'
+  | 'docs-data-matrix';
 
 export const BlogDiagram: React.FC<{ id: BlogDiagramId }> = ({ id }) => {
   switch (id) {
@@ -40,6 +48,12 @@ export const BlogDiagram: React.FC<{ id: BlogDiagramId }> = ({ id }) => {
       return <PrivacyComparisonDiagram />;
     case 'multipart-pipeline':
       return <MultipartPipelineDiagram />;
+    case 'modern-image-formats':
+      return <ModernImageFormatsDiagram />;
+    case 'camera-raw-pipeline':
+      return <CameraRawPipelineDiagram />;
+    case 'docs-data-matrix':
+      return <DocsDataMatrixDiagram />;
   }
 };
 
@@ -451,6 +465,140 @@ function MultipartPipelineDiagram() {
               Cloudflare R2 Edge
             </span>
           </div>
+        </div>
+      </div>
+    </figure>
+  );
+}
+
+function ModernImageFormatsDiagram() {
+  const formats = [
+    {
+      name: 'JPEG XL (.jxl)',
+      badge: 'Archival & HDR',
+      detail: 'Supports both lossless JPEG recompression and wide-gamut alpha photos.',
+      highlight: true,
+    },
+    {
+      name: 'AVIF (.avif)',
+      badge: 'Smallest web photos',
+      detail: 'AV1-based compression cuts photo payloads roughly in half compared to JPEG.',
+      highlight: false,
+    },
+    {
+      name: 'WebP (.webp)',
+      badge: 'Universal web default',
+      detail: '97%+ browser support with fast lossy, lossless, alpha, and animation support.',
+      highlight: false,
+    },
+    {
+      name: 'QOI / DDS / ICNS / JP2',
+      badge: 'Pipelines, GPU & macOS',
+      detail: 'Fast lossless QOI sprites, DirectX DDS textures, Retina ICNS bundles, and JP2 archives.',
+      highlight: false,
+    },
+  ];
+
+  return (
+    <figure className="panel rounded-xl p-5 sm:p-6 my-4 space-y-4">
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <figcaption className="text-xs sm:text-sm font-semibold text-slate-900 dark:text-white flex items-center gap-2">
+          <ImageIcon className="w-4 h-4 text-blue-600 dark:text-blue-400" />
+          <span>Choosing the Right Modern Image Format</span>
+        </figcaption>
+        <span className="text-[11px] font-mono text-slate-500 dark:text-slate-400">
+          Supported natively in Tulusy
+        </span>
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        {formats.map(fmt => (
+          <div
+            key={fmt.name}
+            className={`rounded-lg p-3.5 border space-y-1.5 ${
+              fmt.highlight
+                ? 'border-blue-500/40 bg-blue-50/40 dark:bg-blue-950/20'
+                : 'border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-900/40'
+            }`}
+          >
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-xs font-semibold text-slate-900 dark:text-white">{fmt.name}</span>
+              <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-slate-200/80 dark:bg-slate-800 text-slate-700 dark:text-slate-300 shrink-0">
+                {fmt.badge}
+              </span>
+            </div>
+            <p className="text-[11px] text-slate-600 dark:text-slate-400 leading-relaxed">{fmt.detail}</p>
+          </div>
+        ))}
+      </div>
+    </figure>
+  );
+}
+
+function CameraRawPipelineDiagram() {
+  const steps = [
+    { label: 'Camera RAW', sub: 'CR2 · CR3 · NEF · ARW · DNG · RAF · ORF · RW2' },
+    { label: 'LibRaw Decode', sub: 'Camera white balance + 8-bit RGB demosaic' },
+    { label: 'Resize & DPI', sub: 'Custom width/height, quality, grayscale' },
+    { label: 'Share-Ready Output', sub: 'JPG · WebP · AVIF · JXL · PNG · TIFF · PDF' },
+  ];
+
+  return (
+    <figure className="panel rounded-xl p-5 sm:p-6 my-4 space-y-4">
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <figcaption className="text-xs sm:text-sm font-semibold text-slate-900 dark:text-white flex items-center gap-2">
+          <Camera className="w-4 h-4 text-blue-600 dark:text-blue-400" />
+          <span>Zero-Install Camera RAW Processing Pipeline</span>
+        </figcaption>
+        <span className="text-[11px] font-mono text-slate-500 dark:text-slate-400">
+          Ephemeral memory processing
+        </span>
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
+        {steps.map((step, i) => (
+          <div
+            key={step.label}
+            className="rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-900/40 p-3 space-y-1"
+          >
+            <div className="flex items-center justify-between text-[10px] font-mono text-blue-600 dark:text-blue-400">
+              <span>STEP {i + 1}</span>
+              {i < steps.length - 1 && <ArrowRight className="w-3 h-3 text-slate-400 hidden lg:block" />}
+            </div>
+            <p className="text-xs font-semibold text-slate-900 dark:text-white">{step.label}</p>
+            <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">{step.sub}</p>
+          </div>
+        ))}
+      </div>
+    </figure>
+  );
+}
+
+function DocsDataMatrixDiagram() {
+  return (
+    <figure className="panel rounded-xl p-5 sm:p-6 my-4 space-y-4">
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <figcaption className="text-xs sm:text-sm font-semibold text-slate-900 dark:text-white flex items-center gap-2">
+          <FileCode2 className="w-4 h-4 text-blue-600 dark:text-blue-400" />
+          <span>Two Sanitized Conversion Lanes: Markup &amp; Structured Data</span>
+        </figcaption>
+      </div>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
+        <div className="rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-900/40 p-4 space-y-2">
+          <div className="flex items-center gap-2 text-xs font-semibold text-slate-900 dark:text-white">
+            <ArrowLeftRight className="w-4 h-4 text-blue-600 dark:text-blue-400" />
+            <span>Markup &amp; E-Books (MD · HTML · EPUB · RTF)</span>
+          </div>
+          <p className="text-[11px] text-slate-600 dark:text-slate-400 leading-relaxed">
+            Strips scripts, active tags, and CSS <code className="font-mono">url(...)</code> before building clean PDFs, DOCX headings/tables, or EPUB chapters.
+          </p>
+        </div>
+        <div className="rounded-lg border border-blue-500/40 bg-blue-50/40 dark:bg-blue-950/20 p-4 space-y-2">
+          <div className="flex items-center gap-2 text-xs font-semibold text-slate-900 dark:text-white">
+            <Code2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+            <span>Structured Data (JSON · YAML · XML · CSV · XLSX)</span>
+          </div>
+          <p className="text-[11px] text-slate-700 dark:text-slate-300 leading-relaxed">
+            Uses <code className="font-mono">defusedxml</code> to block XXE bombs, <code className="font-mono">yaml.safe_load</code>, and ISO date normalization for clean JSON, CSV, and Excel exports.
+          </p>
         </div>
       </div>
     </figure>

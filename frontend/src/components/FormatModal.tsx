@@ -2,7 +2,7 @@
 
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { Search, X, Check } from 'lucide-react';
-import { ALL_FORMATS, getCompatibleTargets } from '../lib/formatRegistry';
+import { ALL_FORMATS, getCompatibleTargets, INPUT_ONLY_TARGET_EXTS } from '../lib/formatRegistry';
 import { FormatCategory } from '../types';
 
 type CategoryFilter = 'all' | FormatCategory;
@@ -56,7 +56,7 @@ const FormatModalBody: React.FC<FormatModalProps> = ({
       const allowedSet = new Set(allowedTargets);
       return ALL_FORMATS.filter(f => allowedSet.has(f.ext));
     }
-    return ALL_FORMATS.filter(f => f.ext !== 'psd');
+    return ALL_FORMATS.filter(f => !INPUT_ONLY_TARGET_EXTS.has(f.ext));
   }, [sourceExt, allowedTargets, mode]);
 
   const availableCategories = useMemo(() => {
@@ -64,7 +64,9 @@ const FormatModalBody: React.FC<FormatModalProps> = ({
     const allTabs: Array<{ id: CategoryFilter; label: string }> = [
       { id: 'all', label: 'All Formats' },
       { id: 'image', label: 'Images' },
+      { id: 'raw', label: 'Camera RAW' },
       { id: 'document', label: 'Documents' },
+      { id: 'data', label: 'Data' },
       { id: 'vector', label: 'Vectors' },
       { id: 'icon', label: 'Icons' },
     ];
@@ -136,7 +138,7 @@ const FormatModalBody: React.FC<FormatModalProps> = ({
             <input
               ref={searchInputRef}
               type="text"
-              placeholder="Filter formats (e.g. webp, pdf, avif, svg)..."
+              placeholder="Filter 40 formats (e.g. jxl, cr3, epub, json, webp, pdf)..."
               value={search}
               onChange={e => setSearch(e.target.value)}
               className="w-full bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 rounded-lg pl-9 pr-3 py-2 text-xs sm:text-sm text-slate-900 dark:text-slate-100 placeholder-slate-400 focus:outline-none focus:border-blue-600 transition-colors"

@@ -14,8 +14,8 @@ interface FormatPairSelectorProps {
 
 function FormatGlyph({ ext, className }: { ext: string; className?: string }) {
   const clean = ext.toLowerCase().replace('.', '');
-  const isDoc = ['pdf', 'docx', 'doc', 'pptx', 'ppt', 'txt'].includes(clean);
-  const isSheet = ['xlsx', 'xls', 'csv'].includes(clean);
+  const isDoc = ['pdf', 'docx', 'doc', 'pptx', 'ppt', 'txt', 'md', 'markdown', 'html', 'htm', 'rtf', 'epub'].includes(clean);
+  const isSheet = ['xlsx', 'xls', 'csv', 'json', 'yaml', 'yml', 'xml'].includes(clean);
 
   if (isSheet) {
     return (

@@ -6,21 +6,20 @@ A stylish, ultra-fast, full-stack web platform for converting **any image format
 
 ## 🌟 Highlights & Capabilities
 
-### 🖼️ 1. Universal Image Converter ("Any to Any")
-- **Supported Formats**: `PNG`, `JPG/JPEG`, `WEBP`, `AVIF`, `SVG`, `ICO`, `BMP`, `TIFF`, `GIF`, `HEIC/HEIF`, `PSD`, `TGA`, `PDF`
+### 🖼️ 1. Universal Image & Camera RAW Converter ("Any to Any")
+- **Modern & Standard Images**: `PNG`, `JPG/JPEG`, `WEBP`, `AVIF`, `JXL` (JPEG XL), `JP2` (JPEG 2000), `QOI`, `DDS`, `PPM`, `SVG`, `ICO`, `ICNS`, `CUR` (input), `BMP`, `TIFF`, `GIF`, `HEIC/HEIF`, `PSD` (input), `TGA`, `PDF`
+- **Camera RAW Models (LibRaw)**: `CR2`, `CR3`, `NEF`, `ARW`, `DNG`, `RAF`, `ORF`, `RW2` -> convertible to JPG, PNG, WebP, AVIF, JXL, TIFF, PDF, and more
 - **Granular Controls**:
   - Quality / Compression Slider (1% to 100%)
   - Custom Resize (Width & Height) with Aspect Ratio Lock
   - DPI configuration (72 Web, 150 Screen, 300 Print, 600 Ultra)
-  - Color palette mode (Full Color or Black & White Grayscale)
-  - Transparency replacement background color for JPG
+  - Color palette mode (Full Color or Black & White Grayscale with alpha preservation)
+  - Transparency replacement background color for JPG, BMP, PPM, and PDF
 
-### 📄 2. Document & PDF Converter
-- **PDF to DOCX**: Accurately extracts text paragraphs, font styles, tables, headings, and images into an editable Word document.
-- **PDF to PPTX**: Converts PDF pages into editable PowerPoint slide decks with extracted text frames and high-res vector backdrops.
-- **Images to PDF**: Combine multiple pictures into a single multi-page PDF document.
-- **PDF to Images**: Extract all pages as high-resolution PNG, JPG, or WebP.
-- **DOCX / TXT to PDF**: Convert text and documents to standard PDF.
+### 📄 2. Document, Markup, E-Book & Structured Data Converter
+- **PDF & Office**: `PDF`, `DOCX`, `PPTX`, `XLSX`, `CSV`, `TXT` (PDF to DOCX/PPTX/XLSX/CSV/MD/HTML/EPUB/Images, Images to PDF, DOCX/PPTX/XLSX/CSV/TXT to PDF)
+- **Markup & E-Books**: `MD` (Markdown), `HTML`, `EPUB`, `RTF` (input) with sanitized HTML-to-PDF rendering and structured DOCX/EPUB generation
+- **Structured Data**: Bidirectional `JSON`, `YAML`, `XML`, `CSV`, `XLSX`, `PDF`, and `TXT` with `defusedxml` XXE protection and ISO date handling
 
 ### ✨ 3. Modern, Stylish Glassmorphism UI
 - Neon dark mode with frosted glass cards (`backdrop-blur-xl`), animated ambient glows, and micro-interactions.

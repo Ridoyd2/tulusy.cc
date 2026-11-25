@@ -31,6 +31,7 @@ MAX_IMAGE_DIMENSION = int(os.getenv("MAX_IMAGE_DIMENSION", "16384").strip() or "
 MAX_IMAGE_FRAMES = int(os.getenv("MAX_IMAGE_FRAMES", "300").strip() or "300")
 MAX_PDF_PAGES = int(os.getenv("MAX_PDF_PAGES", "200").strip() or "200")
 MAX_XLSX_PDF_ROWS = int(os.getenv("MAX_XLSX_PDF_ROWS", "5000").strip() or "5000")
+MAX_DATA_TABLE_ROWS = int(os.getenv("MAX_DATA_TABLE_ROWS", "50000").strip() or "50000")
 MAX_TXT_PDF_LINES = int(os.getenv("MAX_TXT_PDF_LINES", "10000").strip() or "10000")
 TEMP_FILE_TTL_SECONDS = int(os.getenv("TEMP_FILE_TTL_SECONDS", "3600").strip() or "3600")
 
@@ -91,18 +92,27 @@ BLOCKED_HOSTING_EXTENSIONS = {
 }
 
 # Supported formats mappings and metadata
+CAMERA_RAW_FORMATS = {
+    "cr2", "cr3", "nef", "arw", "dng", "raf", "orf", "rw2"
+}
+
 SUPPORTED_IMAGE_FORMATS = [
-    "png", "jpg", "jpeg", "webp", "avif", "gif", "bmp", "tiff", "ico",
-    "svg", "heic", "heif", "psd", "tga", "pdf"
+    "png", "jpg", "jpeg", "webp", "avif", "jxl", "gif", "bmp", "tiff", "ico",
+    "jp2", "qoi", "dds", "icns", "ppm", "cur",
+    "svg", "heic", "heif", "psd", "tga", "pdf",
+    "cr2", "cr3", "nef", "arw", "dng", "raf", "orf", "rw2",
 ]
 
 WRITABLE_IMAGE_FORMATS = {
-    "png", "jpg", "jpeg", "webp", "avif", "gif", "bmp", "tiff", "tif",
+    "png", "jpg", "jpeg", "webp", "avif", "jxl", "gif", "bmp", "tiff", "tif",
+    "jp2", "j2k", "qoi", "dds", "icns", "ppm",
     "ico", "svg", "heic", "heif", "tga", "pdf"
 }
 
 LEGACY_UNSUPPORTED_DOC_FORMATS = {"doc", "ppt", "xls"}
 
 SUPPORTED_DOC_FORMATS = [
-    "pdf", "docx", "pptx", "txt", "xlsx", "csv"
+    "pdf", "docx", "pptx", "txt", "xlsx", "csv",
+    "md", "html", "rtf", "epub",
+    "json", "yaml", "xml",
 ]

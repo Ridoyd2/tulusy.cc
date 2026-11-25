@@ -1,4 +1,4 @@
-export type FormatCategory = 'image' | 'document' | 'vector' | 'icon';
+export type FormatCategory = 'image' | 'raw' | 'document' | 'data' | 'vector' | 'icon';
 
 export interface FormatOption {
   ext: string;

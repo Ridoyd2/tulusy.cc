@@ -2,13 +2,14 @@
 
 import React from 'react';
 import { ShieldCheck, Zap, Layers, FileType } from 'lucide-react';
+import { ALL_FORMATS } from '@/lib/formatRegistry';
 
 export const FeatureGrid: React.FC = () => {
   const features = [
     {
       icon: <FileType className="w-4 h-4 text-slate-700 dark:text-slate-300" />,
-      title: '18 Native Formats',
-      desc: 'PNG, JPG, WebP, AVIF, SVG, ICO, BMP, TIFF, GIF, HEIC, PSD, TGA, PDF, DOCX, PPTX, XLSX, CSV, and TXT.',
+      title: `${ALL_FORMATS.length} Native Formats`,
+      desc: 'Modern images (PNG, JPG, WebP, AVIF, JXL, JP2, QOI, DDS, HEIC, SVG, ICO, ICNS), Camera RAW (CR2, CR3, NEF, ARW, DNG), Documents (PDF, DOCX, MD, HTML, EPUB, RTF), and Data (JSON, YAML, XML, CSV, XLSX).',
     },
     {
       icon: <Layers className="w-4 h-4 text-slate-700 dark:text-slate-300" />,

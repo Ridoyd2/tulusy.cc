@@ -332,6 +332,11 @@ const subSitemaps = [
     hasImages: false,
   },
   {
+    filename: 'raw-converters.xml',
+    entries: buildConverterEntries(groupById.get('raw')?.pairs || [], '0.75'),
+    hasImages: false,
+  },
+  {
     filename: 'image-converters.xml',
     entries: buildConverterEntries(groupById.get('images')?.pairs || [], '0.7'),
     hasImages: false,

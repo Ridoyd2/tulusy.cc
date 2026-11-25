@@ -226,6 +226,11 @@ export default function HtmlSitemapPage() {
                   </a>
                 </li>
                 <li>
+                  <a href="/sitemaps/raw-converters.xml" className="text-blue-600 dark:text-blue-400 hover:underline">
+                    /sitemaps/raw-converters.xml (Camera RAW)
+                  </a>
+                </li>
+                <li>
                   <a href="/sitemaps/image-converters.xml" className="text-blue-600 dark:text-blue-400 hover:underline">
                     /sitemaps/image-converters.xml
                   </a>

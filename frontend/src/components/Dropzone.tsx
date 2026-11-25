@@ -183,7 +183,7 @@ export const Dropzone = forwardRef<DropzoneHandle, DropzoneProps>(({
         <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400 mt-1 leading-relaxed">
           {activePresetLabel
             ? `Files added will automatically target ${activePresetLabel}.`
-            : 'Images (PNG, JPG, WebP, AVIF, SVG, HEIC, ICO, PSD) & Documents (PDF, DOCX, PPTX, XLSX, CSV, TXT).'}
+            : 'Images & Camera RAW (PNG, JPG, WebP, AVIF, JXL, HEIC, CR2/NEF/ARW/DNG), Documents (PDF, DOCX, MD, HTML, EPUB, RTF) & Data (JSON, YAML, XML, CSV, XLSX).'}
         </p>
 
         <div className="mt-5 w-full sm:w-auto flex flex-col sm:flex-row items-center justify-center gap-3">

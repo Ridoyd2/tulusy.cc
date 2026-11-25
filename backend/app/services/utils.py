@@ -1,4 +1,5 @@
 import asyncio
+import csv
 import re
 import shutil
 import time
@@ -15,12 +16,115 @@ from app.config import (
     UPLOAD_DIR,
 )
 
+FORMAT_ALIASES = {
+    "yml": "yaml",
+    "htm": "html",
+    "markdown": "md",
+    "j2k": "jp2",
+    "jpeg": "jpg",
+    "heif": "heic",
+    "tif": "tiff",
+}
+
+MIME_EXT_MAP = {
+    "image/png": "png",
+    "image/jpeg": "jpg",
+    "image/jpg": "jpg",
+    "image/webp": "webp",
+    "image/avif": "avif",
+    "image/jxl": "jxl",
+    "image/jp2": "jp2",
+    "image/qoi": "qoi",
+    "image/vnd-ms.dds": "dds",
+    "image/icns": "icns",
+    "image/x-portable-pixmap": "ppm",
+    "image/gif": "gif",
+    "image/bmp": "bmp",
+    "image/tiff": "tiff",
+    "image/heic": "heic",
+    "image/heif": "heic",
+    "image/svg+xml": "svg",
+    "image/x-icon": "ico",
+    "image/vnd.microsoft.icon": "ico",
+    "image/x-tga": "tga",
+    "image/vnd.adobe.photoshop": "psd",
+    "image/x-canon-cr2": "cr2",
+    "image/x-canon-cr3": "cr3",
+    "image/x-nikon-nef": "nef",
+    "image/x-sony-arw": "arw",
+    "image/x-adobe-dng": "dng",
+    "image/x-fuji-raf": "raf",
+    "image/x-olympus-orf": "orf",
+    "image/x-panasonic-rw2": "rw2",
+    "application/pdf": "pdf",
+    "text/plain": "txt",
+    "text/csv": "csv",
+    "text/markdown": "md",
+    "text/html": "html",
+    "application/rtf": "rtf",
+    "text/rtf": "rtf",
+    "application/epub+zip": "epub",
+    "application/json": "json",
+    "application/yaml": "yaml",
+    "text/yaml": "yaml",
+    "application/xml": "xml",
+    "text/xml": "xml",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation": "pptx",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "xlsx",
+}
+
+_XML_ILLEGAL_CTRL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
+
+
+def strip_xml_control_chars(val: object) -> str:
+    """Removes control characters disallowed in XML 1.0 documents (preserving \\t, \\n, \\r)."""
+    return _XML_ILLEGAL_CTRL_RE.sub("", "" if val is None else str(val))
+
+
+def ensure_csv_field_size_limit(limit: int = 16 * 1024 * 1024) -> None:
+    """Raises Python csv.reader field_size_limit so legitimate large text/JSON cells do not error."""
+    if csv.field_size_limit() < limit:
+        csv.field_size_limit(limit)
+
+
+def normalize_format_alias(raw_format: Optional[str]) -> str:
+    """Normalizes a format token and maps common extension aliases (e.g. yml -> yaml, j2k -> jp2)."""
+    clean = (raw_format or "").strip().lower().lstrip(".")
+    return FORMAT_ALIASES.get(clean, clean)
+
+
+def ensure_upload_extension(input_path: Path, content_type: Optional[str]) -> Tuple[Path, str]:
+    """Infers and appends a file extension from MIME type for extensionless uploads and returns canonical ext."""
+    ext = input_path.suffix.lower().lstrip(".")
+    if not ext and content_type:
+        raw_mime = content_type.split(";", 1)[0].strip().lower()
+        inferred = MIME_EXT_MAP.get(raw_mime, "")
+        if inferred:
+            renamed_path = input_path.with_name(f"{input_path.name}.{inferred}")
+            counter = 1
+            while renamed_path.exists():
+                renamed_path = input_path.with_name(f"{input_path.name}_{counter}.{inferred}")
+                counter += 1
+            input_path.rename(renamed_path)
+            input_path = renamed_path
+            ext = inferred
+    return input_path, normalize_format_alias(ext)
+
 IMAGE_MEDIA_TYPES = {
     "jpg": "image/jpeg",
     "jpeg": "image/jpeg",
     "png": "image/png",
     "webp": "image/webp",
     "avif": "image/avif",
+    "jxl": "image/jxl",
+    "jp2": "image/jp2",
+    "j2k": "image/jp2",
+    "qoi": "image/qoi",
+    "dds": "image/vnd-ms.dds",
+    "icns": "image/icns",
+    "ppm": "image/x-portable-pixmap",
+    "cur": "image/x-icon",
     "heic": "image/heic",
     "heif": "image/heif",
     "svg": "image/svg+xml",
@@ -31,6 +135,22 @@ IMAGE_MEDIA_TYPES = {
     "tif": "image/tiff",
     "tga": "image/x-tga",
     "pdf": "application/pdf",
+}
+
+DOC_MEDIA_TYPES = {
+    "pdf": "application/pdf",
+    "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "csv": "text/csv",
+    "txt": "text/plain",
+    "md": "text/markdown",
+    "html": "text/html",
+    "rtf": "application/rtf",
+    "epub": "application/epub+zip",
+    "json": "application/json",
+    "yaml": "application/yaml",
+    "xml": "application/xml",
 }
 
 

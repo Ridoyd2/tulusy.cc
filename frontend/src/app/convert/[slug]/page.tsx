@@ -2,6 +2,7 @@ import React from 'react';
 import { Metadata } from 'next';
 import { notFound, permanentRedirect } from 'next/navigation';
 import { getSEOPair, getAllSEOSlugs } from '@/lib/seoData';
+import { supportsImageParameters } from '@/lib/formatRegistry';
 import { safeJsonLd, SITE_ROOT_URL, SITE_URL } from '@/lib/site';
 import { ConvertClient } from './ConvertClient';
 
@@ -63,9 +64,12 @@ export default async function ConvertPage({ params }: PageProps) {
     permanentRedirect(`/convert/${seoData.slug}`);
   }
 
+  const DOC_OR_DATA_EXTS = new Set([
+    'pdf', 'docx', 'pptx', 'xlsx', 'csv', 'txt', 'md', 'html', 'rtf', 'epub', 'json', 'yaml', 'xml',
+  ]);
   const isDocumentFlow =
-    ['pdf', 'docx', 'pptx', 'xlsx', 'csv', 'txt'].includes(seoData.source) ||
-    ['pdf', 'docx', 'pptx', 'xlsx', 'csv', 'txt'].includes(seoData.target);
+    DOC_OR_DATA_EXTS.has(seoData.source) || DOC_OR_DATA_EXTS.has(seoData.target);
+  const hasImageParams = supportsImageParameters(seoData.source, seoData.target);
 
   // 1. WebApplication Schema
   const webAppSchema = {
@@ -102,8 +106,12 @@ export default async function ConvertPage({ params }: PageProps) {
       },
       {
         '@type': 'HowToStep',
-        name: 'Choose settings & start conversion',
-        text: `Optionally customize output quality or dimensions and click "Convert".`,
+        name: hasImageParams
+          ? 'Choose settings & start conversion'
+          : `Convert ${seoData.source.toUpperCase()} to ${seoData.target.toUpperCase()}`,
+        text: hasImageParams
+          ? 'Optionally customize output quality or dimensions and click "Convert".'
+          : `Click "Convert" to transform your .${seoData.source.toLowerCase()} file into .${seoData.target.toLowerCase()} cleanly.`,
         url: `${SITE_URL}/convert/${seoData.slug}#convert`,
       },
       {

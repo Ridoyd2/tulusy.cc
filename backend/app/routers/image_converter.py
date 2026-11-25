@@ -9,7 +9,9 @@ from app.services.utils import (
     cleanup_task_dir,
     create_task_dir,
     create_zip_archive,
+    ensure_upload_extension,
     get_safe_stem,
+    normalize_format_alias,
     save_upload_file,
     validate_target_format,
 )
@@ -37,8 +39,9 @@ async def convert_image_endpoint(
     task_id, upload_dir, output_dir = create_task_dir()
 
     try:
-        target_fmt = validate_target_format(target_format, WRITABLE_IMAGE_FORMATS)
+        target_fmt = validate_target_format(normalize_format_alias(target_format), WRITABLE_IMAGE_FORMATS)
         input_path = await save_upload_file(file, upload_dir)
+        input_path, _ = ensure_upload_extension(input_path, file.content_type)
         stem = get_safe_stem(file.filename, "converted_image")
         output_filename = f"{stem}.{target_fmt}"
         output_path = output_dir / output_filename
@@ -95,10 +98,11 @@ async def convert_image_batch_endpoint(
     try:
         if not files:
             raise ValueError("No files uploaded for batch conversion.")
-        target_fmt = validate_target_format(target_format, WRITABLE_IMAGE_FORMATS)
+        target_fmt = validate_target_format(normalize_format_alias(target_format), WRITABLE_IMAGE_FORMATS)
 
         for file in files:
             input_path = await save_upload_file(file, upload_dir)
+            input_path, _ = ensure_upload_extension(input_path, file.content_type)
             base_stem = get_safe_stem(input_path.name, "converted_image")
             output_path = output_dir / f"{base_stem}.{target_fmt}"
             counter = 1

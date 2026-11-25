@@ -88,7 +88,7 @@ export const HomeClient: React.FC = () => {
               Release files to add to conversion queue
             </p>
             <p className="text-xs text-slate-500 dark:text-slate-400">
-              Supports images, documents, PDFs, and spreadsheets
+              Supports images, Camera RAW, PDFs, Office docs, e-books, and structured data
             </p>
           </div>
         </div>
@@ -110,7 +110,7 @@ export const HomeClient: React.FC = () => {
               Free Universal File Converter
             </h1>
             <p className="text-xs sm:text-sm text-slate-600 dark:text-slate-400 leading-relaxed">
-              Convert between raster images, vector graphics, PDFs, Word documents, presentations, and spreadsheets. Ephemeral processing with zero retention.
+              Convert between modern images, Camera RAW photos, PDFs, Office docs, Markdown, HTML, EPUB, and structured data (JSON, YAML, XML, CSV). Ephemeral processing with zero retention.
             </p>
           </div>
 

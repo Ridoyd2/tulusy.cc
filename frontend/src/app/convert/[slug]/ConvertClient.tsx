@@ -10,7 +10,7 @@ import { FormatPairSelector } from '@/components/FormatPairSelector';
 import { SettingsModal } from '@/components/SettingsModal';
 import { Footer } from '@/components/Footer';
 import { DEFAULT_CONVERSION_SETTINGS, useConversionQueue } from '@/hooks/useConversionQueue';
-import { DEFAULT_TARGET_FORMATS, getCompatibleTargets, normalizeFormatExt } from '@/lib/formatRegistry';
+import { DEFAULT_TARGET_FORMATS, getCompatibleTargets, normalizeFormatExt, supportsImageParameters } from '@/lib/formatRegistry';
 import { FormatPairSEO, getRelatedSEOPairs, resolveCanonicalSlug } from '@/lib/seoData';
 import { ArrowRight, ChevronDown } from 'lucide-react';
 import Link from 'next/link';
@@ -63,6 +63,7 @@ export const ConvertClient: React.FC<ConvertClientProps> = ({ seoData }) => {
   });
 
   const relatedPairs = getRelatedSEOPairs(seoData, 8);
+  const hasImageParams = supportsImageParameters(seoData.source, seoData.target);
   const uniqueBatchSources = new Set(
     files
       .filter(f => f.size > 0 && f.size <= 100 * 1024 * 1024 && getCompatibleTargets(f.sourceExt).length > 0)
@@ -174,9 +175,13 @@ export const ConvertClient: React.FC<ConvertClientProps> = ({ seoData }) => {
               <div className="w-6 h-6 rounded-md bg-slate-900 dark:bg-white text-white dark:text-slate-900 font-mono font-bold text-xs flex items-center justify-center">
                 2
               </div>
-              <h3 className="text-xs sm:text-sm font-semibold text-slate-900 dark:text-white">Configure & Process</h3>
+              <h3 className="text-xs sm:text-sm font-semibold text-slate-900 dark:text-white">
+                {hasImageParams ? 'Configure & Process' : 'Start Instant Conversion'}
+              </h3>
               <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
-                Adjust resolution, DPI, or compression settings if needed, then click &ldquo;Convert&rdquo;.
+                {hasImageParams
+                  ? 'Adjust resolution, DPI, or compression settings if needed, then click “Convert”.'
+                  : `Review your queued .${seoData.source.toLowerCase()} files and click “Convert” to generate .${seoData.target.toLowerCase()} output.`}
               </p>
             </div>
 

@@ -9,7 +9,7 @@ import { safeJsonLd, SITE_ROOT_URL, SITE_URL } from '@/lib/site';
 
 const totalPairs = getAllSEOSlugs().length;
 const directoryTitle = `All File Converters - ${totalPairs}+ Free Tools`;
-const directoryDescription = `Browse ${totalPairs}+ free online file converters on Tulusy. Convert PDFs, Word, Excel, PowerPoint, images, icons, and vectors with zero retention.`;
+const directoryDescription = `Browse ${totalPairs}+ free online converters on Tulusy. Convert images, Camera RAW (CR2/CR3/NEF/ARW/DNG), PDFs, Office docs, Markdown, HTML, EPUB, JSON, YAML, XML, and CSV.`;
 
 export const metadata: Metadata = {
   title: directoryTitle,
@@ -17,8 +17,11 @@ export const metadata: Metadata = {
   keywords: [
     'online file converters',
     'free format converter directory',
+    'camera raw cr2 cr3 nef dng converter',
+    'jxl avif qoi dds image converter',
+    'markdown html epub converter',
+    'json yaml xml csv converter',
     'pdf converter tools',
-    'image converter tools',
     'document converter list',
   ],
   alternates: {

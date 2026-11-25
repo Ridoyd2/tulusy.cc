@@ -26,7 +26,7 @@ export default function HomePage() {
       priceCurrency: 'USD',
     },
     description:
-      'Free online converter for images, PDFs, Word documents, PowerPoint presentations, and Excel spreadsheets with zero file retention.',
+      'Free online converter across 40 formats including images, Camera RAW, PDFs, Office docs, Markdown, HTML, EPUB, JSON, YAML, XML, and CSV with zero retention.',
   };
 
   return (

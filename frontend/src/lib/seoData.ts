@@ -389,6 +389,10 @@ const FORMAT_EXT_ALIASES: Record<string, string> = {
   jpeg: 'jpg',
   heif: 'heic',
   tif: 'tiff',
+  j2k: 'jp2',
+  yml: 'yaml',
+  htm: 'html',
+  markdown: 'md',
   doc: 'docx',
   ppt: 'pptx',
   xls: 'xlsx',
@@ -416,19 +420,41 @@ const DEVELOPER_MAP: Record<string, string> = {
   jpg: 'Joint Photographic Experts Group (ISO/IEC)',
   webp: 'Google LLC',
   avif: 'Alliance for Open Media (AOMedia)',
+  jxl: 'Joint Photographic Experts Group (ISO/IEC 18181)',
+  jp2: 'Joint Photographic Experts Group (ISO/IEC 15444)',
+  qoi: 'Dominic Szablewski (MIT Open Standard)',
+  dds: 'Microsoft Corporation (DirectX)',
+  ppm: 'Netpbm Project (Jef Poskanzer)',
   svg: 'World Wide Web Consortium (W3C)',
   ico: 'Microsoft Corporation',
+  icns: 'Apple Inc.',
+  cur: 'Microsoft Corporation',
   bmp: 'Microsoft Corporation',
   tiff: 'Aldus / Adobe Systems (ISO 12639)',
   gif: 'CompuServe',
   heic: 'Moving Picture Experts Group (MPEG) / Apple',
   psd: 'Adobe Inc.',
   tga: 'Truevision Inc.',
+  cr2: 'Canon Inc.',
+  cr3: 'Canon Inc.',
+  nef: 'Nikon Corporation',
+  arw: 'Sony Corporation',
+  dng: 'Adobe Inc. (ISO 12234-2)',
+  raf: 'Fujifilm Corporation',
+  orf: 'Olympus / OM Digital Solutions',
+  rw2: 'Panasonic Corporation',
   pdf: 'Adobe Systems / ISO 32000',
   docx: 'Microsoft Corporation / ECMA-376',
   pptx: 'Microsoft Corporation / ECMA-376',
   xlsx: 'Microsoft Corporation / ECMA-376',
+  md: 'John Gruber / CommonMark (RFC 7763)',
+  html: 'WHATWG / W3C',
+  rtf: 'Microsoft Corporation',
+  epub: 'W3C / IDPF (ISO/IEC TS 30135)',
   csv: 'IETF RFC 4180 Open Standard',
+  json: 'IETF RFC 8259 / ECMA-404',
+  yaml: 'YAML Language Development Team',
+  xml: 'World Wide Web Consortium (W3C)',
   txt: 'ISO/IEC / Unicode Consortium',
 };
 
@@ -451,7 +477,7 @@ export function getSEOPair(slug: string): FormatPairSEO | undefined {
   const srcUpper = srcFmt.ext.toUpperCase();
   const tgtUpper = tgtFmt.ext.toUpperCase();
   const isImageTarget = ['image', 'vector', 'icon'].includes(tgtFmt.category);
-  const isDocSource = ['pdf', 'docx', 'pptx', 'xlsx', 'csv', 'txt'].includes(srcFmt.ext);
+  const isDocSource = srcFmt.category === 'document' || srcFmt.category === 'data';
   const isImageToPdf = tgtFmt.ext === 'pdf' && !isDocSource;
 
   const description = isImageTarget
@@ -462,20 +488,26 @@ export function getSEOPair(slug: string): FormatPairSEO | undefined {
     ? `Convert ${srcUpper} documents into universal print-ready PDF files online for free. Preserves clean layout, text, and tables with zero file retention.`
     : `Convert ${srcUpper} files to ${tgtUpper} online for free. Fast, accurate text, layout, and structured data extraction with ephemeral zero-retention processing.`;
 
-  const qualityFaq = isImageTarget
-    ? {
-        q: `Does converting ${srcUpper} to ${tgtUpper} preserve image quality?`,
-        a: `Yes. Tulusy uses precision Pillow, HEIF, and vector rasterization pipelines with customizable quality, DPI, grayscale, and resolution controls so your ${tgtUpper} output looks sharp.`,
-      }
-    : isImageToPdf
-    ? {
-        q: `Does converting ${srcUpper} to PDF preserve image resolution?`,
-        a: `Yes. You can customize target DPI resolution, output dimensions, and background fill color before exporting your ${srcUpper} images into a universal PDF.`,
-      }
-    : {
-        q: `Does converting ${srcUpper} to ${tgtUpper} preserve formatting and content?`,
-        a: `Yes. Our server-side document engine preserves readable text, slide order, or structured spreadsheet cells as cleanly as possible while converting ${srcUpper} to ${tgtUpper}.`,
-      };
+  const qualityFaq =
+    srcFmt.category === 'raw'
+      ? {
+          q: `Does converting ${srcUpper} Camera RAW to ${tgtUpper} preserve color and detail?`,
+          a: `Yes. Tulusy decodes ${srcUpper} sensor data using LibRaw with camera white balance before exporting to ${tgtUpper} with customizable quality, DPI, and resize controls.`,
+        }
+      : isImageTarget
+      ? {
+          q: `Does converting ${srcUpper} to ${tgtUpper} preserve image quality?`,
+          a: `Yes. Tulusy uses precision Pillow, JPEG XL, HEIF, and vector rasterization pipelines with customizable quality, DPI, grayscale, and resolution controls so your ${tgtUpper} output looks sharp.`,
+        }
+      : isImageToPdf
+      ? {
+          q: `Does converting ${srcUpper} to PDF preserve image resolution?`,
+          a: `Yes. You can customize target DPI resolution, output dimensions, and background fill color before exporting your ${srcUpper} images into a universal PDF.`,
+        }
+      : {
+          q: `Does converting ${srcUpper} to ${tgtUpper} preserve formatting and content?`,
+          a: `Yes. Our server-side document and data engine preserves headings, tables, or structured records cleanly while converting ${srcUpper} to ${tgtUpper}.`,
+        };
 
   return {
     slug: `${srcFmt.ext}-to-${tgtFmt.ext}`,
@@ -506,14 +538,26 @@ export function getSEOPair(slug: string): FormatPairSEO | undefined {
     ],
     sourceSpecs: {
       developer: DEVELOPER_MAP[srcFmt.ext] || 'Open Standard',
-      type: srcFmt.category === 'document' ? 'Document / Data Format' : 'Graphics / Image Format',
+      type:
+        srcFmt.category === 'raw'
+          ? 'Camera RAW Sensor Image'
+          : srcFmt.category === 'data'
+          ? 'Structured Data Format'
+          : srcFmt.category === 'document'
+          ? 'Document / E-Book Format'
+          : 'Graphics / Image Format',
       mime: srcFmt.mime,
       compression: srcFmt.lossless ? 'Lossless compression' : 'Lossy / High-efficiency compression',
       pros: [srcFmt.description],
     },
     targetSpecs: {
       developer: DEVELOPER_MAP[tgtFmt.ext] || 'Open Standard',
-      type: tgtFmt.category === 'document' ? 'Document / Data Format' : 'Graphics / Image Format',
+      type:
+        tgtFmt.category === 'data'
+          ? 'Structured Data Format'
+          : tgtFmt.category === 'document'
+          ? 'Document / E-Book Format'
+          : 'Graphics / Image Format',
       mime: tgtFmt.mime,
       compression: tgtFmt.lossless ? 'Lossless compression' : 'Lossy / High-efficiency compression',
       pros: [tgtFmt.description],
@@ -583,35 +627,50 @@ export interface ConverterDirectoryGroup {
 }
 
 export function getConverterDirectoryGroups(): ConverterDirectoryGroup[] {
+  const categoryByExt = new Map(ALL_FORMATS.map(f => [f.ext, f.category]));
   const allPairs = getAllSEOSlugs()
     .map(slug => getSEOPair(slug))
     .filter((pair): pair is FormatPairSEO => Boolean(pair));
 
   const pdfPairs = allPairs.filter(p => p.source === 'pdf' || p.target === 'pdf');
-  const documentPairs = allPairs.filter(
-    p => p.source !== 'pdf' && p.target !== 'pdf' && ['docx', 'pptx', 'xlsx', 'csv', 'txt'].includes(p.source)
-  );
-  const imagePairs = allPairs.filter(
-    p => p.source !== 'pdf' && p.target !== 'pdf' && !['docx', 'pptx', 'xlsx', 'csv', 'txt'].includes(p.source)
-  );
+  const documentPairs = allPairs.filter(p => {
+    if (p.source === 'pdf' || p.target === 'pdf') return false;
+    const cat = categoryByExt.get(p.source);
+    return cat === 'document' || cat === 'data';
+  });
+  const rawPairs = allPairs.filter(p => {
+    if (p.source === 'pdf' || p.target === 'pdf') return false;
+    return categoryByExt.get(p.source) === 'raw';
+  });
+  const imagePairs = allPairs.filter(p => {
+    if (p.source === 'pdf' || p.target === 'pdf') return false;
+    const cat = categoryByExt.get(p.source);
+    return cat !== 'document' && cat !== 'data' && cat !== 'raw';
+  });
 
   return [
     {
       id: 'pdf',
       title: 'PDF Conversion Tools',
-      description: 'Convert PDFs to editable Word, PowerPoint, Excel, CSV, text, or images, and turn documents or graphics into PDF.',
+      description: 'Convert PDFs to editable Word, PowerPoint, Excel, CSV, Markdown, HTML, EPUB, or images, and turn documents or graphics into PDF.',
       pairs: pdfPairs,
     },
     {
       id: 'documents',
-      title: 'Word, Presentation & Spreadsheet Tools',
-      description: 'Transform DOCX, PPTX, XLSX, CSV, and TXT files cleanly without installing office suites.',
+      title: 'Documents, Markup, E-Books & Data Tools',
+      description: 'Transform DOCX, PPTX, XLSX, Markdown, HTML, RTF, EPUB, CSV, JSON, YAML, XML, and TXT files cleanly in the browser.',
       pairs: documentPairs,
+    },
+    {
+      id: 'raw',
+      title: 'Camera RAW Photo Converters',
+      description: 'Develop Canon CR2/CR3, Nikon NEF, Sony ARW, Adobe DNG, Fujifilm RAF, Olympus ORF, and Panasonic RW2 RAW photos into JPG, PNG, WebP, AVIF, or JXL.',
+      pairs: rawPairs,
     },
     {
       id: 'images',
       title: 'Image, Vector & Icon Converters',
-      description: 'Convert between PNG, JPG, WebP, AVIF, HEIC, SVG, ICO, GIF, TIFF, BMP, PSD, and TGA.',
+      description: 'Convert between PNG, JPG, WebP, AVIF, JPEG XL (JXL), JPEG 2000 (JP2), QOI, DDS, PPM, HEIC, SVG, ICO, ICNS, CUR, GIF, TIFF, BMP, PSD, and TGA.',
       pairs: imagePairs,
     },
   ];

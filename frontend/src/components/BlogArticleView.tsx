@@ -1,7 +1,7 @@
 import React from 'react';
 import Image from 'next/image';
 import Link from 'next/link';
-import { ArrowLeft, ArrowRight, HardDriveUpload } from 'lucide-react';
+import { ArrowLeft, ArrowLeftRight, ArrowRight, HardDriveUpload } from 'lucide-react';
 import { BlogBlock, BlogPost, formatBlogDate } from '@/lib/blogData';
 import { BlogDiagram } from './BlogDiagrams';
 import { ToolFaqAccordion } from './ToolFaqAccordion';
@@ -181,7 +181,11 @@ function renderBlock(block: BlogBlock, idx: number) {
               href={block.href}
               className="px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold inline-flex items-center gap-1.5 transition-colors"
             >
-              <HardDriveUpload className="w-3.5 h-3.5" />
+              {block.href.startsWith('/share') ? (
+                <HardDriveUpload className="w-3.5 h-3.5" />
+              ) : (
+                <ArrowLeftRight className="w-3.5 h-3.5" />
+              )}
               <span>{block.buttonLabel}</span>
             </Link>
             {block.secondaryLabel && block.secondaryHref && (

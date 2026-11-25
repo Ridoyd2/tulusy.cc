@@ -26,10 +26,14 @@ export const TOOL_ROUTES: Record<ActiveTool, ToolRouteConfig> = {
     footerLabel: 'File Converter',
     title: 'Tulusy - Free Universal File Converter & 5GB Anonymous Drop',
     description:
-      'Free online converter for images, PDFs, documents, and spreadsheets, plus secure 5GB anonymous file sharing. Fast, privacy-first, zero tracking.',
+      'Free online converter for modern images, Camera RAW, PDFs, Office docs, e-books & data (40 formats), plus 5GB anonymous file sharing. Zero tracking.',
     keywords: [
       'file converter',
       'image converter',
+      'camera raw converter',
+      'jxl to webp',
+      'markdown to pdf',
+      'json to yaml',
       'pdf to word',
       'png to webp',
       'heic to jpg',

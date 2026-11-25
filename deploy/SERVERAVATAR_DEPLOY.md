@@ -54,6 +54,12 @@ sudo systemctl restart tulusy-backend
 curl -s http://127.0.0.1:8480/api/health
 ```
 
+> **After Future `git pull` Updates:** Whenever `backend/requirements.txt` changes, sync the existing virtualenv and restart the backend service:
+> ```bash
+> /path/to/repo/backend/.venv/bin/pip install -r /path/to/repo/backend/requirements.txt
+> sudo systemctl restart tulusy-backend
+> ```
+
 ---
 
 ## 5. Route `/api/*` Directly to FastAPI in ServerAvatar Nginx

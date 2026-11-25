@@ -1,11 +1,11 @@
 import csv
 import math
-import re
 from pathlib import Path
 from xml.sax.saxutils import escape
 from zipfile import BadZipFile
 from app.config import MAX_XLSX_PDF_ROWS
 from app.services.pdf_service import _open_valid_pdf
+from app.services.utils import ensure_csv_field_size_limit, strip_xml_control_chars
 
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
@@ -15,13 +15,10 @@ from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, Tabl
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib import colors
 
-_XML_ILLEGAL_CTRL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
-
-
 def _sanitize_excel_value(val: object) -> object:
     """Strips illegal XML 1.0 control characters before writing strings to openpyxl cells."""
     if isinstance(val, str):
-        return _XML_ILLEGAL_CTRL_RE.sub("", val)
+        return strip_xml_control_chars(val)
     return val
 
 
@@ -180,34 +177,38 @@ def convert_csv_to_xlsx(csv_path: Path, xlsx_path: Path) -> Path:
             bottom=Side(style="thin", color="E2E8F0")
         )
 
-        with open(csv_path, "r", encoding="utf-8-sig", errors="ignore", newline="") as f:
-            reader = csv.reader(f)
-            for row_idx, row in enumerate(reader, start=1):
-                for col_idx, value in enumerate(row, start=1):
-                    val = value.strip()
-                    if val.isascii() and val.isdigit():
-                        cell_val: object = val if ((len(val) > 1 and val.startswith("0")) or len(val) > 15) else int(val)
-                    else:
-                        unsigned = val.lstrip("+-")
-                        if (
-                            "_" in val
-                            or (len(unsigned) > 1 and unsigned.startswith("0") and not unsigned.startswith("0."))
-                        ):
-                            cell_val = val
+        ensure_csv_field_size_limit()
+        try:
+            with open(csv_path, "r", encoding="utf-8-sig", errors="ignore", newline="") as f:
+                reader = csv.reader(f)
+                for row_idx, row in enumerate(reader, start=1):
+                    for col_idx, value in enumerate(row, start=1):
+                        val = value.strip()
+                        if val.isascii() and val.isdigit():
+                            cell_val: object = val if ((len(val) > 1 and val.startswith("0")) or len(val) > 15) else int(val)
                         else:
-                            try:
-                                parsed_num = float(val)
-                                cell_val = parsed_num if math.isfinite(parsed_num) else val
-                            except ValueError:
+                            unsigned = val.lstrip("+-")
+                            if (
+                                "_" in val
+                                or (len(unsigned) > 1 and unsigned.startswith("0") and not unsigned.startswith("0."))
+                            ):
                                 cell_val = val
+                            else:
+                                try:
+                                    parsed_num = float(val)
+                                    cell_val = parsed_num if math.isfinite(parsed_num) else val
+                                except ValueError:
+                                    cell_val = val
 
-                    cell = ws.cell(row=row_idx, column=col_idx, value=_sanitize_excel_value(cell_val))
-                    cell.border = thin_border
+                        cell = ws.cell(row=row_idx, column=col_idx, value=_sanitize_excel_value(cell_val))
+                        cell.border = thin_border
 
-                    if row_idx == 1:
-                        cell.font = header_font
-                        cell.fill = header_fill
-                        cell.alignment = Alignment(horizontal="center", vertical="center")
+                        if row_idx == 1:
+                            cell.font = header_font
+                            cell.fill = header_fill
+                            cell.alignment = Alignment(horizontal="center", vertical="center")
+        except csv.Error as e:
+            raise ValueError(f"Invalid CSV file: {e}")
 
         for col in ws.columns:
             max_len = max((len(str(cell.value or "")) for cell in col), default=10)

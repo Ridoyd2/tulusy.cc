@@ -5,11 +5,14 @@ from typing import List, Optional
 
 from app.config import LEGACY_UNSUPPORTED_DOC_FORMATS, WRITABLE_IMAGE_FORMATS
 from app.services.utils import (
+    DOC_MEDIA_TYPES,
     IMAGE_MEDIA_TYPES,
     cleanup_task_dir,
     create_task_dir,
     create_zip_archive,
+    ensure_upload_extension,
     get_safe_stem,
+    normalize_format_alias,
     save_upload_file,
     validate_target_format,
 )
@@ -26,6 +29,8 @@ from app.services.pdf_service import (
     convert_txt_to_pdf,
 )
 from app.services.image_service import convert_single_image
+from app.services.markup_service import convert_markup_or_ebook
+from app.services.data_service import convert_structured_data
 from app.services.excel_service import (
     convert_xlsx_to_pdf,
     convert_xlsx_to_csv,
@@ -38,29 +43,15 @@ from app.services.excel_service import (
 router = APIRouter(prefix="/api/convert", tags=["PDF Tools & Universal"])
 
 
-_MIME_EXT_MAP = {
-    "image/png": "png",
-    "image/jpeg": "jpg",
-    "image/jpg": "jpg",
-    "image/webp": "webp",
-    "image/avif": "avif",
-    "image/gif": "gif",
-    "image/bmp": "bmp",
-    "image/tiff": "tiff",
-    "image/heic": "heic",
-    "image/heif": "heic",
-    "image/svg+xml": "svg",
-    "image/x-icon": "ico",
-    "image/vnd.microsoft.icon": "ico",
-    "image/x-tga": "tga",
-    "image/vnd.adobe.photoshop": "psd",
-    "application/pdf": "pdf",
-    "text/plain": "txt",
-    "text/csv": "csv",
-    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
-    "application/vnd.openxmlformats-officedocument.presentationml.presentation": "pptx",
-    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "xlsx",
+_MARKUP_EBOOK_SOURCES = {"md", "html", "rtf", "epub"}
+_MARKUP_TARGETS_BY_SOURCE = {
+    "md": {"html", "pdf", "docx", "epub", "txt"},
+    "html": {"md", "pdf", "docx", "epub", "txt"},
+    "rtf": {"txt", "pdf", "docx", "html", "md", "epub"},
+    "epub": {"txt", "html", "md", "pdf", "docx"},
 }
+_DATA_FORMATS = {"json", "yaml", "xml"}
+_DATA_TARGETS = _DATA_FORMATS | {"csv", "xlsx", "pdf", "txt"}
 
 
 @router.post("/pdf-to-images")
@@ -79,7 +70,7 @@ async def pdf_to_images_endpoint(
     """Extracts all pages from a PDF as images, returned as single image (if 1 page) or ZIP archive."""
     task_id, upload_dir, output_dir = create_task_dir()
     try:
-        target_img_fmt = validate_target_format(format, WRITABLE_IMAGE_FORMATS - {"pdf"})
+        target_img_fmt = validate_target_format(normalize_format_alias(format), WRITABLE_IMAGE_FORMATS - {"pdf"})
         input_path = await save_upload_file(file, upload_dir)
         extracted = await asyncio.to_thread(
             extract_pdf_pages_to_images,
@@ -140,6 +131,7 @@ async def images_to_pdf_endpoint(
         saved_paths = []
         for file in files:
             p = await save_upload_file(file, upload_dir)
+            p, _ = ensure_upload_extension(p, file.content_type)
             saved_paths.append(p)
 
         safe_stem = get_safe_stem(output_name, "merged_document")
@@ -183,18 +175,14 @@ async def universal_convert_endpoint(
     """
     task_id, upload_dir, output_dir = create_task_dir()
     try:
-        all_known_targets = WRITABLE_IMAGE_FORMATS | {"docx", "pptx", "xlsx", "csv", "txt"}
-        target_fmt = validate_target_format(target_format, all_known_targets)
+        all_known_targets = WRITABLE_IMAGE_FORMATS | {
+            "docx", "pptx", "xlsx", "csv", "txt",
+            "md", "html", "epub", "json", "yaml", "xml",
+        }
+        target_fmt = validate_target_format(normalize_format_alias(target_format), all_known_targets)
 
         input_path = await save_upload_file(file, upload_dir)
-        source_ext = input_path.suffix.lower().lstrip(".")
-        if not source_ext:
-            raw_mime = (file.content_type or "").split(";", 1)[0].strip().lower()
-            source_ext = _MIME_EXT_MAP.get(raw_mime, "")
-            if source_ext:
-                renamed_path = input_path.with_name(f"{input_path.name}.{source_ext}")
-                input_path.rename(renamed_path)
-                input_path = renamed_path
+        input_path, source_ext = ensure_upload_extension(input_path, file.content_type)
         stem = get_safe_stem(file.filename, "converted_file")
 
         if source_ext in LEGACY_UNSUPPORTED_DOC_FORMATS:
@@ -209,23 +197,27 @@ async def universal_convert_endpoint(
             if target_fmt == "docx":
                 out_file = output_dir / f"{stem}.docx"
                 await asyncio.to_thread(convert_pdf_to_docx, input_path, out_file)
-                media_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                media_type = DOC_MEDIA_TYPES["docx"]
             elif target_fmt == "pptx":
                 out_file = output_dir / f"{stem}.pptx"
                 await asyncio.to_thread(convert_pdf_to_pptx, input_path, out_file)
-                media_type = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+                media_type = DOC_MEDIA_TYPES["pptx"]
             elif target_fmt == "xlsx":
                 out_file = output_dir / f"{stem}.xlsx"
                 await asyncio.to_thread(convert_pdf_to_xlsx, input_path, out_file)
-                media_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                media_type = DOC_MEDIA_TYPES["xlsx"]
             elif target_fmt == "csv":
                 out_file = output_dir / f"{stem}.csv"
                 await asyncio.to_thread(convert_pdf_to_csv, input_path, out_file)
-                media_type = "text/csv"
+                media_type = DOC_MEDIA_TYPES["csv"]
             elif target_fmt == "txt":
                 out_file = output_dir / f"{stem}.txt"
                 await asyncio.to_thread(convert_pdf_to_txt, input_path, out_file)
-                media_type = "text/plain"
+                media_type = DOC_MEDIA_TYPES["txt"]
+            elif target_fmt in ("html", "md", "epub"):
+                out_file = output_dir / f"{stem}.{target_fmt}"
+                await asyncio.to_thread(convert_markup_or_ebook, input_path, "pdf", target_fmt, out_file)
+                media_type = DOC_MEDIA_TYPES[target_fmt]
             elif target_fmt in (WRITABLE_IMAGE_FORMATS - {"pdf"}):
                 extracted = await asyncio.to_thread(
                     extract_pdf_pages_to_images,
@@ -257,11 +249,15 @@ async def universal_convert_endpoint(
             if target_fmt == "pdf":
                 out_file = output_dir / f"{stem}.pdf"
                 await asyncio.to_thread(convert_xlsx_to_pdf, input_path, out_file)
-                media_type = "application/pdf"
+                media_type = DOC_MEDIA_TYPES["pdf"]
             elif target_fmt == "csv":
                 out_file = output_dir / f"{stem}.csv"
                 await asyncio.to_thread(convert_xlsx_to_csv, input_path, out_file)
-                media_type = "text/csv"
+                media_type = DOC_MEDIA_TYPES["csv"]
+            elif target_fmt in _DATA_FORMATS:
+                out_file = output_dir / f"{stem}.{target_fmt}"
+                await asyncio.to_thread(convert_structured_data, input_path, "xlsx", target_fmt, out_file)
+                media_type = DOC_MEDIA_TYPES[target_fmt]
             else:
                 raise ValueError(f"Unsupported conversion from .{source_ext} to .{target_fmt}")
 
@@ -269,11 +265,15 @@ async def universal_convert_endpoint(
             if target_fmt == "xlsx":
                 out_file = output_dir / f"{stem}.xlsx"
                 await asyncio.to_thread(convert_csv_to_xlsx, input_path, out_file)
-                media_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                media_type = DOC_MEDIA_TYPES["xlsx"]
             elif target_fmt == "pdf":
                 out_file = output_dir / f"{stem}.pdf"
                 await asyncio.to_thread(convert_csv_to_pdf, input_path, out_file)
-                media_type = "application/pdf"
+                media_type = DOC_MEDIA_TYPES["pdf"]
+            elif target_fmt in _DATA_FORMATS:
+                out_file = output_dir / f"{stem}.{target_fmt}"
+                await asyncio.to_thread(convert_structured_data, input_path, "csv", target_fmt, out_file)
+                media_type = DOC_MEDIA_TYPES[target_fmt]
             else:
                 raise ValueError(f"Unsupported conversion from .csv to .{target_fmt}")
 
@@ -282,11 +282,15 @@ async def universal_convert_endpoint(
             if target_fmt == "pdf":
                 out_file = output_dir / f"{stem}.pdf"
                 await asyncio.to_thread(convert_docx_to_pdf, input_path, out_file)
-                media_type = "application/pdf"
+                media_type = DOC_MEDIA_TYPES["pdf"]
             elif target_fmt == "txt":
                 out_file = output_dir / f"{stem}.txt"
                 await asyncio.to_thread(convert_docx_to_txt, input_path, out_file)
-                media_type = "text/plain"
+                media_type = DOC_MEDIA_TYPES["txt"]
+            elif target_fmt in ("html", "md", "epub"):
+                out_file = output_dir / f"{stem}.{target_fmt}"
+                await asyncio.to_thread(convert_markup_or_ebook, input_path, "docx", target_fmt, out_file)
+                media_type = DOC_MEDIA_TYPES[target_fmt]
             else:
                 raise ValueError(f"Unsupported conversion from .{source_ext} to .{target_fmt}")
 
@@ -294,11 +298,11 @@ async def universal_convert_endpoint(
             if target_fmt == "pdf":
                 out_file = output_dir / f"{stem}.pdf"
                 await asyncio.to_thread(convert_pptx_to_pdf, input_path, out_file)
-                media_type = "application/pdf"
+                media_type = DOC_MEDIA_TYPES["pdf"]
             elif target_fmt == "txt":
                 out_file = output_dir / f"{stem}.txt"
                 await asyncio.to_thread(convert_pptx_to_txt, input_path, out_file)
-                media_type = "text/plain"
+                media_type = DOC_MEDIA_TYPES["txt"]
             else:
                 raise ValueError(f"Unsupported conversion from .{source_ext} to .{target_fmt}")
 
@@ -306,9 +310,30 @@ async def universal_convert_endpoint(
             if target_fmt == "pdf":
                 out_file = output_dir / f"{stem}.pdf"
                 await asyncio.to_thread(convert_txt_to_pdf, input_path, out_file)
-                media_type = "application/pdf"
+                media_type = DOC_MEDIA_TYPES["pdf"]
+            elif target_fmt in ("html", "md", "epub"):
+                out_file = output_dir / f"{stem}.{target_fmt}"
+                await asyncio.to_thread(convert_markup_or_ebook, input_path, "txt", target_fmt, out_file)
+                media_type = DOC_MEDIA_TYPES[target_fmt]
             else:
                 raise ValueError(f"Unsupported conversion from .txt to .{target_fmt}")
+
+        # 3b. Markdown, HTML, RTF, EPUB
+        elif source_ext in _MARKUP_EBOOK_SOURCES:
+            allowed_targets = _MARKUP_TARGETS_BY_SOURCE[source_ext]
+            if target_fmt not in allowed_targets:
+                raise ValueError(f"Unsupported conversion from .{source_ext} to .{target_fmt}")
+            out_file = output_dir / f"{stem}.{target_fmt}"
+            await asyncio.to_thread(convert_markup_or_ebook, input_path, source_ext, target_fmt, out_file)
+            media_type = DOC_MEDIA_TYPES[target_fmt]
+
+        # 3c. Structured Data (JSON, YAML, XML)
+        elif source_ext in _DATA_FORMATS:
+            if target_fmt == source_ext or target_fmt not in _DATA_TARGETS:
+                raise ValueError(f"Unsupported conversion from .{source_ext} to .{target_fmt}")
+            out_file = output_dir / f"{stem}.{target_fmt}"
+            await asyncio.to_thread(convert_structured_data, input_path, source_ext, target_fmt, out_file)
+            media_type = DOC_MEDIA_TYPES[target_fmt]
 
         # 4. Image to Any Image / PDF / Vector / Icon
         else:

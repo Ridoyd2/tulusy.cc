@@ -3,6 +3,7 @@
 import React from 'react';
 import Link from 'next/link';
 import { ArrowRight, Image as ImageIcon, FileText, Presentation, Layers, Table, FileSpreadsheet } from 'lucide-react';
+import { ALL_IMAGE_ACCEPT } from '@/lib/formatRegistry';
 
 interface QuickToolsProps {
   onPresetSelected: (sourceExt: string, targetExt: string, accept?: string) => void;
@@ -16,7 +17,7 @@ export const QuickTools: React.FC<QuickToolsProps> = ({ onPresetSelected }) => {
       from: 'IMG',
       to: 'WEBP',
       icon: <ImageIcon className="w-4 h-4 text-slate-700 dark:text-slate-300" />,
-      action: () => onPresetSelected('png', 'webp', 'image/*,.heic,.psd,.tga'),
+      action: () => onPresetSelected('png', 'webp', ALL_IMAGE_ACCEPT),
     },
     {
       title: 'PDF to Word',
@@ -64,7 +65,7 @@ export const QuickTools: React.FC<QuickToolsProps> = ({ onPresetSelected }) => {
       from: 'IMG',
       to: 'PDF',
       icon: <Layers className="w-4 h-4 text-slate-700 dark:text-slate-300" />,
-      action: () => onPresetSelected('png', 'pdf', 'image/*'),
+      action: () => onPresetSelected('png', 'pdf', ALL_IMAGE_ACCEPT),
     },
     {
       title: 'HEIC to JPG',

@@ -4,11 +4,30 @@ from pathlib import Path
 from typing import Optional, List, Tuple
 from PIL import Image, ImageOps, UnidentifiedImageError, features
 import pillow_heif
-from app.config import MAX_IMAGE_DIMENSION, MAX_IMAGE_FRAMES, MAX_PDF_PAGES, WRITABLE_IMAGE_FORMATS
+from app.config import (
+    CAMERA_RAW_FORMATS,
+    MAX_IMAGE_DIMENSION,
+    MAX_IMAGE_FRAMES,
+    MAX_PDF_PAGES,
+    WRITABLE_IMAGE_FORMATS,
+)
 from app.services.utils import validate_image_params, validate_target_format
 
 # Register HEIF/HEIC opener with Pillow
 pillow_heif.register_heif_opener()
+
+# Register JPEG XL opener/writer plugin when available
+try:
+    import pillow_jxl  # noqa: F401
+    HAS_JXL = True
+except ImportError:
+    HAS_JXL = False
+
+try:
+    import rawpy
+    HAS_RAWPY = True
+except ImportError:
+    HAS_RAWPY = False
 
 # Keep Pillow decompression bomb guard active while allowing configured MAX_IMAGE_DIMENSION
 Image.MAX_IMAGE_PIXELS = max(89_478_485, MAX_IMAGE_DIMENSION * MAX_IMAGE_DIMENSION)
@@ -90,6 +109,22 @@ def load_image(input_path: Path) -> List[Image.Image]:
         except Exception as e:
             raise ValueError(f"Could not decode PSD image: {e}")
 
+    # 2b. Handle Camera RAW formats via LibRaw (CR2, CR3, NEF, ARW, DNG, RAF, ORF, RW2)
+    if ext in CAMERA_RAW_FORMATS:
+        if not HAS_RAWPY:
+            raise ValueError("Camera RAW format support is not installed on the server.")
+        try:
+            with rawpy.imread(str(input_path)) as raw:
+                rgb = raw.postprocess(use_camera_wb=True, no_auto_bright=False, output_bps=8)
+            pil_img = Image.fromarray(rgb)
+            if pil_img.width > MAX_IMAGE_DIMENSION or pil_img.height > MAX_IMAGE_DIMENSION:
+                pil_img.thumbnail((MAX_IMAGE_DIMENSION, MAX_IMAGE_DIMENSION), Image.Resampling.LANCZOS)
+            return [pil_img]
+        except ValueError:
+            raise
+        except Exception as e:
+            raise ValueError(f"Could not decode Camera RAW image '{input_path.name}': {e}")
+
     # 3. Handle PDF files as image input
     if ext == 'pdf':
         try:
@@ -113,10 +148,22 @@ def load_image(input_path: Path) -> List[Image.Image]:
         finally:
             doc.close()
 
-    # 4. Standard and HEIC/HEIF / TIFF / WebP / BMP / GIF etc. via Pillow
+    # 4. Standard and HEIC/HEIF / TIFF / WebP / BMP / GIF / CUR etc. via Pillow
     try:
         img = Image.open(str(input_path))
     except (UnidentifiedImageError, Image.DecompressionBombError, OSError) as e:
+        # Windows 10/11 PNG-compressed .cur files fail CurImagePlugin's BMP-only parser;
+        # patching header type 2 -> 1 in memory lets IcoImagePlugin decode PNG frames cleanly.
+        if ext == "cur":
+            try:
+                raw_bytes = input_path.read_bytes()
+                if len(raw_bytes) >= 6 and raw_bytes[0:4] == b"\x00\x00\x02\x00":
+                    patched = bytearray(raw_bytes)
+                    patched[2:4] = b"\x01\x00"
+                    with Image.open(io.BytesIO(patched), formats=["ICO"]) as cur_img:
+                        return [cur_img.copy()]
+            except Exception:
+                pass
         raise ValueError(f"Could not decode image file '{input_path.name}': {e}")
 
     frames: List[Image.Image] = []
@@ -192,6 +239,14 @@ def _normalize_mode_for_resize(img: Image.Image) -> Image.Image:
     if img.mode in ("PA", "RGBa"):
         return img.convert("RGBA")
     return img.convert("RGB")
+
+
+def _to_rgb_or_rgba(img: Image.Image) -> Image.Image:
+    """Converts any image to RGB or RGBA (preserving alpha for formats requiring 3/4-channel color)."""
+    if img.mode in ("RGB", "RGBA"):
+        return img
+    has_alpha = img.mode in ("LA", "PA", "RGBa") or (img.mode == "P" and "transparency" in img.info)
+    return img.convert("RGBA" if has_alpha else "RGB")
 
 
 def apply_image_transformations(
@@ -339,19 +394,74 @@ def convert_single_image(
         elif target_format == "avif":
             if not features.check("avif"):
                 raise RuntimeError("AVIF encoding requires Pillow >= 11.3 with libavif support.")
-            export_img = primary_img
-            if export_img.mode not in ("RGB", "RGBA"):
-                export_img = export_img.convert("RGBA" if export_img.mode in ("LA", "P") else "RGB")
+            export_img = _to_rgb_or_rgba(primary_img)
             try:
                 export_img.save(str(output_path), "AVIF", quality=quality)
             finally:
                 if export_img is not primary_img:
                     export_img.close()
 
+        elif target_format == "jxl":
+            if not HAS_JXL:
+                raise RuntimeError("JPEG XL encoding requires pillow-jxl-plugin.")
+            export_img = _normalize_mode_for_resize(primary_img)
+            try:
+                if quality >= 100:
+                    export_img.save(str(output_path), "JXL", lossless=True)
+                else:
+                    export_img.save(str(output_path), "JXL", quality=quality)
+            finally:
+                if export_img is not primary_img:
+                    export_img.close()
+
+        elif target_format in ("jp2", "j2k"):
+            export_img = _normalize_mode_for_resize(primary_img)
+            try:
+                if quality < 100:
+                    rate = max(1.0, round((100.0 / max(quality, 1)) * 2.5, 1))
+                    export_img.save(str(output_path), "JPEG2000", quality_mode="rates", quality_layers=[rate])
+                else:
+                    export_img.save(str(output_path), "JPEG2000")
+            finally:
+                if export_img is not primary_img:
+                    export_img.close()
+
+        elif target_format in ("qoi", "dds"):
+            pillow_fmt = target_format.upper()
+            export_img = _to_rgb_or_rgba(primary_img)
+            try:
+                export_img.save(str(output_path), pillow_fmt)
+            finally:
+                if export_img is not primary_img:
+                    export_img.close()
+
+        elif target_format == "icns":
+            icns_src = primary_img.convert("RGBA") if primary_img.mode != "RGBA" else primary_img.copy()
+            canvas: Optional[Image.Image] = None
+            try:
+                if max(icns_src.width, icns_src.height) > 1024:
+                    icns_src.thumbnail((1024, 1024), Image.Resampling.LANCZOS)
+                if icns_src.width != icns_src.height and maintain_aspect_ratio:
+                    side = max(icns_src.width, icns_src.height)
+                    canvas = Image.new("RGBA", (side, side), (0, 0, 0, 0))
+                    canvas.paste(icns_src, ((side - icns_src.width) // 2, (side - icns_src.height) // 2))
+                    canvas.save(str(output_path), "ICNS")
+                else:
+                    icns_src.save(str(output_path), "ICNS")
+            finally:
+                if canvas is not None:
+                    canvas.close()
+                icns_src.close()
+
+        elif target_format == "ppm":
+            ppm_img = _composite_to_rgb(primary_img, bg_color)
+            try:
+                ppm_img.save(str(output_path), "PPM")
+            finally:
+                ppm_img.close()
+
         elif target_format in ["heic", "heif"]:
-            export_img = primary_img
-            if export_img.mode not in ("RGB", "RGBA"):
-                export_img = export_img.convert("RGBA" if export_img.mode in ("LA", "P") else "RGB")
+            export_img = _to_rgb_or_rgba(primary_img)
             try:
                 heif_file = pillow_heif.from_pillow(export_img)
                 heif_file.save(str(output_path), quality=quality, format="HEIF")
@@ -364,8 +474,7 @@ def convert_single_image(
                 ico_sizes = [(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)]
             ico_img = primary_img.convert("RGBA") if primary_img.mode != "RGBA" else primary_img
             try:
-                max_dim = max(ico_img.width, ico_img.height)
-                filtered_sizes = [s for s in ico_sizes if s[0] <= max_dim and s[1] <= max_dim]
+                filtered_sizes = [s for s in ico_sizes if s[0] <= ico_img.width and s[1] <= ico_img.height]
                 if not filtered_sizes:
                     filtered_sizes = [(min(256, ico_img.width), min(256, ico_img.height))]
                 ico_img.save(str(output_path), format="ICO", sizes=filtered_sizes)

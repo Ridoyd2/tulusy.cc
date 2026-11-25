@@ -6,6 +6,7 @@ import {
   ALL_FORMATS,
   normalizeFormatExt,
   inferFormatFromMime,
+  isImageSourceExt,
 } from '../lib/formatRegistry';
 import { convertSingleFile, mergeImagesToPdf, downloadBlob } from '../lib/api';
 
@@ -155,12 +156,7 @@ export function useConversionQueue(
       const inferredMimeExt = !rawExt ? inferFormatFromMime(file.type) : '';
       const ext = rawExt || inferredMimeExt;
       const normExt = ext ? normalizeFormatExt(ext) : '';
-      const nonRenderableByImgTag =
-        ['heic', 'heif', 'tiff', 'tif', 'psd', 'tga'].includes(ext) ||
-        ['image/heic', 'image/heif', 'image/tiff'].includes(file.type.toLowerCase());
-      const isImg =
-        !nonRenderableByImgTag &&
-        (BROWSER_PREVIEWABLE_IMAGE_EXTS.has(ext) || file.type.startsWith('image/'));
+      const isImg = Boolean(normExt && BROWSER_PREVIEWABLE_IMAGE_EXTS.has(normExt));
 
       const effectiveSource = normExt || defaultSourceExt || 'bin';
       const isLegacy = LEGACY_UNSUPPORTED_EXTS.has(normExt || ext);
@@ -551,7 +547,9 @@ export function useConversionQueue(
   const handleMergeToPdf = async () => {
     if (isConvertingAny || isMergingPdf || files.length === 0) return;
     setQueueError(null);
-    const imageFiles = files.filter(f => f.size > 0 && f.size <= MAX_CONVERTER_FILE_SIZE).map(f => f.file);
+    const imageFiles = files
+      .filter(f => f.size > 0 && f.size <= MAX_CONVERTER_FILE_SIZE && isImageSourceExt(f.sourceExt))
+      .map(f => f.file);
     if (imageFiles.length === 0) {
       setQueueError('No valid images in queue to merge.');
       return;

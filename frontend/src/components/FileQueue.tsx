@@ -17,7 +17,7 @@ import {
 } from 'lucide-react';
 import { FileItem } from '../types';
 import { downloadBlob } from '../lib/api';
-import { getCompatibleTargets, supportsImageParameters } from '../lib/formatRegistry';
+import { getCompatibleTargets, isImageSourceExt, normalizeFormatExt, supportsImageParameters } from '../lib/formatRegistry';
 
 const MAX_CONVERTER_FILE_SIZE = 100 * 1024 * 1024;
 
@@ -68,9 +68,7 @@ export const FileQueue: React.FC<FileQueueProps> = ({
   const allImages = items.every(i =>
     i.size > 0 &&
     i.size <= MAX_CONVERTER_FILE_SIZE &&
-    ['png', 'jpg', 'jpeg', 'webp', 'avif', 'bmp', 'tiff', 'tif', 'gif', 'heic', 'heif', 'svg', 'psd', 'tga', 'ico'].includes(
-      i.sourceExt.toLowerCase()
-    )
+    isImageSourceExt(i.sourceExt)
   );
 
   const formatFileSize = (bytes: number) => {
@@ -215,6 +213,7 @@ export const FileQueue: React.FC<FileQueueProps> = ({
             item.size <= MAX_CONVERTER_FILE_SIZE &&
             getCompatibleTargets(item.sourceExt).length > 0;
           const showItemSettings = isValidItem && supportsImageParameters(item.sourceExt, item.targetFormat);
+          const badgeExt = item.sourceExt && item.sourceExt !== 'bin' ? normalizeFormatExt(item.sourceExt) : '';
           return (
             <div
               key={item.id}
@@ -237,8 +236,10 @@ export const FileQueue: React.FC<FileQueueProps> = ({
                       alt={item.name}
                       className="w-full h-full object-cover"
                     />
-                  ) : item.sourceExt.toLowerCase() === 'pdf' ? (
-                    <span className="text-slate-700 dark:text-slate-200 font-mono font-bold text-[11px]">PDF</span>
+                  ) : badgeExt && badgeExt.length <= 4 ? (
+                    <span className="text-slate-700 dark:text-slate-200 font-mono font-bold text-[10px] uppercase">
+                      {badgeExt}
+                    </span>
                   ) : (
                     <FileText className="w-4 h-4 text-slate-400" />
                   )}

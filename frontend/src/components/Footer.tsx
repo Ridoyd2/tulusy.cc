@@ -14,18 +14,18 @@ interface FooterProps {
 export const Footer: React.FC<FooterProps> = ({ onSelectTool }) => {
   const popularPairs = [
     { href: '/convert/png-to-webp', label: 'PNG to WebP' },
+    { href: '/convert/jxl-to-webp', label: 'JXL to WebP' },
+    { href: '/convert/cr3-to-jpg', label: 'CR3 RAW to JPG' },
     { href: '/convert/pdf-to-docx', label: 'PDF to DOCX' },
-    { href: '/convert/pdf-to-pptx', label: 'PDF to PPTX' },
-    { href: '/convert/excel-to-pdf', label: 'Excel to PDF' },
-    { href: '/convert/heic-to-jpg', label: 'HEIC to JPG' },
+    { href: '/convert/md-to-pdf', label: 'Markdown to PDF' },
     { href: '/convert', label: 'All Converters →' },
   ];
 
   const featuredGuides = [
+    { href: '/blog/jpeg-xl-avif-webp-qoi-dds-modern-image-formats-guide', label: 'JXL, AVIF, WebP & QOI Guide' },
+    { href: '/blog/camera-raw-cr2-cr3-nef-arw-dng-to-jpg-png-webp-guide', label: 'Camera RAW Conversion Guide' },
+    { href: '/blog/convert-markdown-html-epub-rtf-json-yaml-xml-browser-guide', label: 'Markdown, EPUB & JSON/YAML' },
     { href: '/blog/tulusy-vs-wetransfer-google-drive-mega-mediafire-gofile', label: 'Tulusy vs. Popular Sites' },
-    { href: '/blog/why-tulusy-beats-traditional-file-hosting-services', label: 'Why Tulusy Beats File Hosts' },
-    { href: '/blog/tulusy-vs-email-messaging-apps-usb-airdrop', label: 'vs. Email, Chat & USB' },
-    { href: '/blog/forever-file-hosting-7-day-inactivity-explained', label: 'Forever (7d Idle) Hosting' },
     { href: '/blog', label: 'All Blog Guides →' },
   ];
 

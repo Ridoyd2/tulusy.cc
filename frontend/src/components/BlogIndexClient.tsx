@@ -52,13 +52,22 @@ export const BlogIndexClient: React.FC<BlogIndexClientProps> = ({ posts }) => {
           })}
         </div>
 
-        <Link
-          href="/share"
-          className="inline-flex items-center gap-1.5 text-xs font-medium text-blue-600 dark:text-blue-400 hover:underline"
-        >
-          <span>Open 5GB File Share</span>
-          <ArrowRight className="w-3.5 h-3.5" />
-        </Link>
+        <div className="flex flex-wrap items-center gap-4">
+          <Link
+            href="/convert"
+            className="inline-flex items-center gap-1.5 text-xs font-medium text-slate-700 dark:text-slate-300 hover:text-blue-600 dark:hover:text-blue-400 hover:underline"
+          >
+            <span>Browse 40+ Converters</span>
+            <ArrowRight className="w-3.5 h-3.5" />
+          </Link>
+          <Link
+            href="/share"
+            className="inline-flex items-center gap-1.5 text-xs font-medium text-blue-600 dark:text-blue-400 hover:underline"
+          >
+            <span>Open 5GB File Share</span>
+            <ArrowRight className="w-3.5 h-3.5" />
+          </Link>
+        </div>
       </div>
 
       {/* Lead Article */}

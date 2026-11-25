@@ -5,7 +5,7 @@ export default function manifest(): MetadataRoute.Manifest {
     name: 'Tulusy',
     short_name: 'Tulusy',
     description:
-      'Free online converter for images, PDFs, documents, and spreadsheets, plus secure 5GB anonymous file sharing.',
+      'Free online 40-format converter for images, Camera RAW, PDFs, docs, e-books, and data, plus 5GB anonymous sharing.',
     start_url: '/',
     display: 'standalone',
     background_color: '#090d16',

@@ -13,6 +13,7 @@ import {
   BookOpen
 } from 'lucide-react';
 import { TulusyLogo } from './TulusyLogo';
+import { ALL_IMAGE_ACCEPT } from '@/lib/formatRegistry';
 import { ActiveTool, TOOL_ROUTES } from '@/lib/toolsConfig';
 
 export type { ActiveTool };
@@ -152,12 +153,12 @@ export const Navbar: React.FC<NavbarProps> = ({
           <div className="flex items-center justify-start sm:justify-center gap-1.5 overflow-x-auto no-scrollbar py-2 border-t border-slate-100 dark:border-slate-800/80 text-[11px] font-medium text-slate-600 dark:text-slate-400">
             <span className="text-slate-400 dark:text-slate-500 mr-1 shrink-0 font-medium">Popular:</span>
             {[
-              { src: 'png', fmt: 'webp', accept: 'image/*,.heic,.psd,.tga', label: 'Image → WebP' },
+              { src: 'png', fmt: 'webp', accept: ALL_IMAGE_ACCEPT, label: 'Image → WebP' },
               { src: 'pdf', fmt: 'docx', accept: '.pdf,application/pdf', label: 'PDF → Word' },
               { src: 'pdf', fmt: 'pptx', accept: '.pdf,application/pdf', label: 'PDF → PPTX' },
               { src: 'xlsx', fmt: 'pdf', accept: '.xlsx,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv', label: 'Spreadsheet → PDF' },
-              { src: 'png', fmt: 'ico', accept: 'image/*', label: 'PNG → ICO' },
-              { src: 'png', fmt: 'pdf', accept: 'image/*', label: 'Images → PDF' },
+              { src: 'png', fmt: 'ico', accept: ALL_IMAGE_ACCEPT, label: 'PNG → ICO' },
+              { src: 'png', fmt: 'pdf', accept: ALL_IMAGE_ACCEPT, label: 'Images → PDF' },
             ].map((preset, i) => (
               <button
                 key={i}

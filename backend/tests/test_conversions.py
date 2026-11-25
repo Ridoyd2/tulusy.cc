@@ -33,6 +33,8 @@ from app.services.excel_service import (
     convert_pdf_to_xlsx,
     convert_pdf_to_csv
 )
+from app.services.markup_service import convert_markup_or_ebook
+from app.services.data_service import convert_structured_data
 
 def run_tests():
     test_dir = BASE_DIR / "temp" / "test_run"
@@ -247,8 +249,12 @@ def _run_all_conversion_checks(test_dir: Path):
     img_exts = {item["ext"]: item for item in fmts["images"]}
     doc_exts = {item["ext"]: item for item in fmts["documents"]}
     assert "eps" not in img_exts
-    assert "html" not in doc_exts
+    assert "html" in doc_exts
     assert img_exts["psd"].get("input_only") is True
+    assert img_exts["jxl"]["mime"] == "image/jxl"
+    assert img_exts["cr2"].get("input_only") is True
+    assert doc_exts["json"]["category"] == "data"
+    assert doc_exts["epub"]["mime"] == "application/epub+zip"
     print("[PASS] /api/formats registry aligned with converter handlers")
 
     # 15. Verify genuine AVIF magic bytes (not HEIC fallback)
@@ -416,6 +422,357 @@ def _run_all_conversion_checks(test_dir: Path):
         )
         assert is_gray, f"Expected grayscale output, got mode={res_img.mode}, center_px={px}"
     print("[PASS] PDF -> JPG resize (width=120), grayscale & quality forwarding verified")
+
+    # 26. Test new modern/pro image formats: JXL, JP2, QOI, DDS, ICNS, PPM (plus grayscale & alpha)
+    for fmt in ["jxl", "jp2", "qoi", "dds", "icns", "ppm"]:
+        out_f = test_dir / f"modern.{fmt}"
+        convert_single_image(trans_png, out_f, fmt, quality=85)
+        assert out_f.exists() and out_f.stat().st_size > 0, f"Failed converting to {fmt}"
+        out_gray = test_dir / f"modern_gray.{fmt}"
+        convert_single_image(trans_png, out_gray, fmt, quality=85, grayscale=True)
+        assert out_gray.exists() and out_gray.stat().st_size > 0, f"Failed grayscale converting to {fmt}"
+    # Round-trip JXL & QOI back to PNG via API
+    with open(test_dir / "modern.jxl", "rb") as fp:
+        jxl_resp = client.post(
+            "/api/convert/universal",
+            files={"file": ("modern.jxl", fp, "image/jxl")},
+            data={"target_format": "png"},
+        )
+    assert jxl_resp.status_code == 200 and jxl_resp.content.startswith(b"\x89PNG")
+    # Invalid Camera RAW returns HTTP 400 (not 500)
+    raw_bad = client.post(
+        "/api/convert/universal",
+        files={"file": ("broken.cr2", b"not a real raw file", "image/x-canon-cr2")},
+        data={"target_format": "jpg"},
+    )
+    assert raw_bad.status_code == 400, f"Expected 400 for invalid CR2, got {raw_bad.status_code}"
+    print("[PASS] Modern image formats (JXL, JP2, QOI, DDS, ICNS, PPM) and RAW validation passed")
+
+    # 27. Test Markdown, HTML, RTF, EPUB conversions & HTML sanitization
+    sample_md = test_dir / "guide.md"
+    sample_md.write_text("# Tulusy Guide\n\nHello **world**.\n\n- Item A\n- Item B\n", encoding="utf-8")
+    for tgt in ["html", "pdf", "docx", "epub", "txt"]:
+        out_m = test_dir / f"guide_out.{tgt}"
+        convert_markup_or_ebook(sample_md, "md", tgt, out_m)
+        assert out_m.exists() and out_m.stat().st_size > 0, f"Failed md -> {tgt}"
+
+    # Verify EPUB round-trip -> TXT, MD, HTML, PDF
+    out_epub = test_dir / "guide_out.epub"
+    for tgt in ["txt", "md", "html", "pdf"]:
+        ep_out = test_dir / f"from_epub.{tgt}"
+        convert_markup_or_ebook(out_epub, "epub", tgt, ep_out)
+        assert ep_out.exists() and ep_out.stat().st_size > 0, f"Failed epub -> {tgt}"
+    assert "Tulusy Guide" in (test_dir / "from_epub.txt").read_text(encoding="utf-8")
+
+    # Verify HTML -> PDF strips <script> and local file:// images
+    evil_html = test_dir / "unsafe.html"
+    evil_html.write_text(
+        "<html><body><h1>Safe Title</h1><script>alert(1)</script><img src='file:///etc/passwd'/></body></html>",
+        encoding="utf-8",
+    )
+    safe_pdf = test_dir / "safe_html.pdf"
+    convert_markup_or_ebook(evil_html, "html", "pdf", safe_pdf)
+    assert safe_pdf.exists() and safe_pdf.stat().st_size > 0
+    md_from_html = test_dir / "from_html.md"
+    convert_markup_or_ebook(evil_html, "html", "md", md_from_html)
+    assert "Safe Title" in md_from_html.read_text(encoding="utf-8") and "alert(1)" not in md_from_html.read_text(encoding="utf-8")
+
+    # Verify RTF -> TXT & PDF via universal endpoint
+    rtf_bytes = br"{\rtf1\ansi {\b Hello RTF}\par Second line}"
+    rtf_resp = client.post(
+        "/api/convert/universal",
+        files={"file": ("note.rtf", rtf_bytes, "application/rtf")},
+        data={"target_format": "txt"},
+    )
+    assert rtf_resp.status_code == 200 and "Hello RTF" in rtf_resp.text
+    print("[PASS] Markdown, HTML, RTF, and EPUB conversions & sanitization verified")
+
+    # 28. Test JSON, YAML, XML, CSV, XLSX structured data conversions & XXE guard
+    sample_json = test_dir / "users.json"
+    sample_json.write_text('[{"name": "Alice", "role": "Engineer"}, {"name": "Bob", "role": "Designer"}]', encoding="utf-8")
+    for tgt in ["yaml", "xml", "csv", "xlsx", "pdf", "txt"]:
+        out_d = test_dir / f"users_out.{tgt}"
+        convert_structured_data(sample_json, "json", tgt, out_d)
+        assert out_d.exists() and out_d.stat().st_size > 0, f"Failed json -> {tgt}"
+
+    # Round-trip YAML -> JSON & XML -> JSON
+    yaml_to_json = test_dir / "yaml_back.json"
+    convert_structured_data(test_dir / "users_out.yaml", "yaml", "json", yaml_to_json)
+    assert "Alice" in yaml_to_json.read_text(encoding="utf-8")
+
+    xml_to_json = test_dir / "xml_back.json"
+    convert_structured_data(test_dir / "users_out.xml", "xml", "json", xml_to_json)
+    assert "Alice" in xml_to_json.read_text(encoding="utf-8")
+
+    # CSV -> JSON & YAML via universal endpoint (including .yml alias)
+    with open(sample_csv, "rb") as fp:
+        csv_yaml_resp = client.post(
+            "/api/convert/universal",
+            files={"file": ("sample.csv", fp, "text/csv")},
+            data={"target_format": "yml"},
+        )
+    assert csv_yaml_resp.status_code == 200 and "Alice" in csv_yaml_resp.text
+
+    # XXE entity bomb must be rejected cleanly with HTTP 400
+    xxe_payload = b'<?xml version="1.0"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM "file:///etc/passwd">]><root>&xxe;</root>'
+    xxe_resp = client.post(
+        "/api/convert/universal",
+        files={"file": ("evil.xml", xxe_payload, "application/xml")},
+        data={"target_format": "json"},
+    )
+    assert xxe_resp.status_code == 400, f"Expected 400 for XXE XML, got {xxe_resp.status_code}"
+    print("[PASS] Structured data (JSON, YAML, XML, CSV, XLSX) & XXE protection verified")
+
+    # 29. Regression checks from deep audit (dates->JSON, XML attrs/tags, double-HTML, DOCX nesting, EpubNav, CUR, CSS)
+    import struct
+    from datetime import datetime as _dt
+    from lxml import etree as _lxml_etree
+    from docx import Document as _DocxDoc
+
+    # 29a. txt->html & rtf->html single <html> root
+    plain_src = test_dir / "single_root.txt"
+    plain_src.write_text("Line one\nLine two", encoding="utf-8")
+    plain_html = test_dir / "single_root.html"
+    convert_markup_or_ebook(plain_src, "txt", "html", plain_html)
+    assert plain_html.read_text(encoding="utf-8").lower().count("<html") == 1, "Double <html> tag in txt->html"
+    rtf_html = test_dir / "rtf_single.html"
+    rtf_src = test_dir / "rtf_single.rtf"
+    rtf_src.write_bytes(rtf_bytes)
+    convert_markup_or_ebook(rtf_src, "rtf", "html", rtf_html)
+    assert rtf_html.read_text(encoding="utf-8").lower().count("<html") == 1, "Double <html> tag in rtf->html"
+
+    # 29b. YAML date + integer key -> JSON & list of dates -> CSV
+    yaml_dates = test_dir / "dates.yaml"
+    yaml_dates.write_text("created: 2026-11-25\n1: one\nitems:\n  - name: A\n    dates:\n      - 2026-11-25\n", encoding="utf-8")
+    yaml_dates_json = test_dir / "dates.json"
+    convert_structured_data(yaml_dates, "yaml", "json", yaml_dates_json)
+    assert '"2026-11-25"' in yaml_dates_json.read_text(encoding="utf-8")
+    yaml_dates_csv = test_dir / "dates.csv"
+    convert_structured_data(yaml_dates, "yaml", "csv", yaml_dates_csv)
+    assert "2026-11-25" in yaml_dates_csv.read_text(encoding="utf-8")
+
+    # 29c. XLSX datetime cell -> JSON
+    wb_dt = openpyxl.Workbook()
+    ws_dt = wb_dt.active
+    ws_dt.append(["Name", "Created"])
+    ws_dt.append(["Alice", _dt(2026, 11, 25, 10, 30)])
+    xlsx_dt = test_dir / "dt.xlsx"
+    wb_dt.save(str(xlsx_dt))
+    wb_dt.close()
+    xlsx_dt_json = test_dir / "dt.json"
+    convert_structured_data(xlsx_dt, "xlsx", "json", xlsx_dt_json)
+    assert "2026-11-25T10:30:00" in xlsx_dt_json.read_text(encoding="utf-8")
+
+    # 29d. Tricky JSON keys (-id, .env, \x00) -> strict XML & XML with @attr -> CSV unwrap
+    tricky_json = test_dir / "tricky_keys.json"
+    tricky_json.write_text('{"-id": "1", ".env": "ok\\u0000bad"}', encoding="utf-8")
+    tricky_xml = test_dir / "tricky_keys.xml"
+    convert_structured_data(tricky_json, "json", "xml", tricky_xml)
+    _lxml_etree.fromstring(tricky_xml.read_bytes())
+
+    attr_xml = test_dir / "attr_users.xml"
+    attr_xml.write_text('<users version="1.0"><user><name>Alice</name></user><user><name>Bob</name></user></users>', encoding="utf-8")
+    attr_csv = test_dir / "attr_users.csv"
+    convert_structured_data(attr_xml, "xml", "csv", attr_csv)
+    attr_csv_lines = attr_csv.read_text(encoding="utf-8").splitlines()
+    assert attr_csv_lines[0] == "name" and "Alice" in attr_csv_lines[1] and "Bob" in attr_csv_lines[2]
+
+    # 29e. HTML nested <ul><li><p> + nested list + leaf <div> -> DOCX without duplicates, plus CSS/PI sanitization
+    nested_html = test_dir / "nested_docx.html"
+    nested_html.write_text(
+        "<?xml version='1.0' encoding='utf-8'?>"
+        "<style>@import url('file:///etc/passwd');</style>"
+        "<ul><li><p>BulletOnce</p><ul><li>NestedItem</li></ul></li></ul>"
+        "<div style=\"background:url('file:///etc/passwd')\">LeafDivText</div>",
+        encoding="utf-8",
+    )
+    nested_docx = test_dir / "nested_docx.docx"
+    convert_markup_or_ebook(nested_html, "html", "docx", nested_docx)
+    doc_paras = [p.text for p in _DocxDoc(str(nested_docx)).paragraphs if p.text.strip()]
+    assert doc_paras.count("BulletOnce") == 1, f"Expected single BulletOnce, got {doc_paras}"
+    assert "NestedItem" in doc_paras and "LeafDivText" in doc_paras, f"Missing nested/div text: {doc_paras}"
+    sanitized_html_out = test_dir / "sanitized_check.html"
+    convert_markup_or_ebook(nested_html, "html", "html", sanitized_html_out)
+    sanitized_str = sanitized_html_out.read_text(encoding="utf-8")
+    assert "<?xml" not in sanitized_str and "@import" not in sanitized_str and "file:///" not in sanitized_str
+
+    # 29f. EPUB -> TXT skips EpubNav TOC duplication
+    docx_for_ep = test_dir / "ep_src.docx"
+    ep_doc_obj = _DocxDoc()
+    ep_doc_obj.add_heading("Chapter One", level=1)
+    ep_doc_obj.add_paragraph("Body paragraph only.")
+    ep_doc_obj.save(str(docx_for_ep))
+    ep_built = test_dir / "ep_built.epub"
+    convert_markup_or_ebook(docx_for_ep, "docx", "epub", ep_built)
+    ep_txt_out = test_dir / "ep_built.txt"
+    convert_markup_or_ebook(ep_built, "epub", "txt", ep_txt_out)
+    ep_txt_val = ep_txt_out.read_text(encoding="utf-8").strip()
+    assert ep_txt_val.startswith("Chapter One"), f"Unexpected EpubNav prefix in EPUB->TXT: {ep_txt_val!r}"
+
+    # 29g. .markdown alias & rtf target rejection
+    with open(sample_md, "rb") as fp:
+        md_alias_resp = client.post(
+            "/api/convert/universal",
+            files={"file": ("notes.markdown", fp, "text/markdown")},
+            data={"target_format": "pdf"},
+        )
+    assert md_alias_resp.status_code == 200 and md_alias_resp.content.startswith(b"%PDF")
+    with open(sample_md, "rb") as fp:
+        bad_rtf_tgt = client.post(
+            "/api/convert/universal",
+            files={"file": ("notes.md", fp, "text/markdown")},
+            data={"target_format": "rtf"},
+        )
+    assert bad_rtf_tgt.status_code == 400
+
+    # 29h. PNG-in-CUR & BMP-DIB CUR -> PNG + CMYK/I;16/17x17 -> modern image targets
+    ico_buf = io.BytesIO()
+    Image.new("RGBA", (32, 32), (255, 0, 0, 255)).save(ico_buf, format="ICO", sizes=[(32, 32)])
+    png_cur_bytes = bytearray(ico_buf.getvalue())
+    struct.pack_into("<H", png_cur_bytes, 2, 2)
+    png_cur = test_dir / "modern.cur"
+    png_cur.write_bytes(bytes(png_cur_bytes))
+    convert_single_image(png_cur, test_dir / "from_png_cur.png", "png")
+    assert (test_dir / "from_png_cur.png").stat().st_size > 0
+
+    w_c, h_c = 16, 16
+    xor_bits = b"\x00\x00\xff\xff" * (w_c * h_c)
+    and_bits = b"\x00" * (4 * h_c)
+    dib_hdr = struct.pack("<IiiHHIIiiII", 40, w_c, h_c * 2, 1, 32, 0, len(xor_bits) + len(and_bits), 0, 0, 0, 0)
+    img_data = dib_hdr + xor_bits + and_bits
+    bmp_cur = test_dir / "classic.cur"
+    bmp_cur.write_bytes(struct.pack("<HHH", 0, 2, 1) + struct.pack("<BBBBHHII", w_c, h_c, 0, 0, 0, 0, len(img_data), 22) + img_data)
+    convert_single_image(bmp_cur, test_dir / "from_bmp_cur.png", "png")
+    assert (test_dir / "from_bmp_cur.png").stat().st_size > 0
+
+    cmyk_src = test_dir / "cmyk.tiff"
+    Image.new("CMYK", (17, 17), (10, 20, 30, 40)).save(str(cmyk_src))
+    for tgt in ["jxl", "jp2", "qoi", "dds", "icns", "ppm"]:
+        out_c = test_dir / f"cmyk_17.{tgt}"
+        convert_single_image(cmyk_src, out_c, tgt, quality=80)
+        assert out_c.exists() and out_c.stat().st_size > 0
+    print("[PASS] All deep-audit edge cases (dates, XML, double-HTML, DOCX, EpubNav, CUR, CSS, CMYK) verified")
+
+    # 30. Second-pass hardening regressions: ICNS square pad, ctrl chars -> DOCX/EPUB, reflowable PDF->HTML/MD/EPUB, RSS XML namespaces, 200KB CSV, router parity
+    # 30a. Non-square 300x100 PNG -> ICNS preserves aspect ratio via transparent padding
+    wide_png = test_dir / "wide_300x100.png"
+    Image.new("RGBA", (300, 100), (255, 0, 0, 255)).save(wide_png)
+    wide_icns = test_dir / "wide_300x100.icns"
+    convert_single_image(wide_png, wide_icns, "icns", maintain_aspect_ratio=True)
+    with Image.open(wide_icns) as icns_im:
+        icns_im.load()
+        assert icns_im.getpixel((0, 0))[3] == 0, "Expected transparent padding at top-left of non-square ICNS"
+        assert icns_im.getpixel((icns_im.width // 2, icns_im.height // 2))[:3] == (255, 0, 0)
+
+    # 30b. XML-illegal control characters in TXT/MD/HTML/RTF -> DOCX & strict XML EPUB
+    dirty_bytes = b"Hello\x00World\x07Bell\x0cFormFeed"
+    for dirty_src_ext, dirty_payload in [
+        ("txt", dirty_bytes),
+        ("md", dirty_bytes),
+        ("html", b"<p>" + dirty_bytes + b"</p>"),
+        ("rtf", br"{\rtf1\ansi Hello\x00}" + b"\x07"),
+    ]:
+        dirty_in = test_dir / f"dirty.{dirty_src_ext}"
+        dirty_in.write_bytes(dirty_payload)
+        dirty_docx = test_dir / f"dirty_{dirty_src_ext}.docx"
+        convert_markup_or_ebook(dirty_in, dirty_src_ext, "docx", dirty_docx)
+        assert dirty_docx.stat().st_size > 0
+        dirty_epub = test_dir / f"dirty_{dirty_src_ext}.epub"
+        convert_markup_or_ebook(dirty_in, dirty_src_ext, "epub", dirty_epub)
+        with zipfile.ZipFile(dirty_epub, "r") as ezf:
+            _lxml_etree.fromstring(ezf.read("EPUB/chapter_1.xhtml"))
+
+    # 30c. Reflowable PDF -> HTML / MD / EPUB with heading, wrapped continuous paragraph, and table
+    mixed_pdf = test_dir / "mixed_layout.pdf"
+    mp_doc = fitz.open()
+    mp_pg = mp_doc.new_page(width=612, height=792)
+    mp_pg.insert_text((50, 60), "Quarterly Report", fontsize=20)
+    mp_pg.insert_textbox(
+        fitz.Rect(50, 85, 550, 155),
+        "This continuous paragraph wraps across multiple lines so extraction joins lines without artificial paragraph breaks.",
+        fontsize=11,
+    )
+    for r in range(3):
+        mp_pg.draw_line((50, 175 + r * 24), (350, 175 + r * 24))
+    for c in range(3):
+        mp_pg.draw_line((50 + c * 150, 175), (50 + c * 150, 223))
+    mp_pg.insert_text((60, 192), "Metric", fontsize=11)
+    mp_pg.insert_text((210, 192), "Count", fontsize=11)
+    mp_pg.insert_text((60, 216), "Formats", fontsize=11)
+    mp_pg.insert_text((210, 216), "40", fontsize=11)
+    mp_doc.save(str(mixed_pdf))
+    mp_doc.close()
+
+    mixed_html = test_dir / "mixed_layout.html"
+    convert_markup_or_ebook(mixed_pdf, "pdf", "html", mixed_html)
+    mixed_html_str = mixed_html.read_text(encoding="utf-8")
+    assert "<h2>Quarterly Report</h2>" in mixed_html_str
+    assert "<table>" in mixed_html_str and "width:612.0pt" not in mixed_html_str
+    mixed_md = test_dir / "mixed_layout.md"
+    convert_markup_or_ebook(mixed_pdf, "pdf", "md", mixed_md)
+    mixed_md_str = mixed_md.read_text(encoding="utf-8")
+    assert "## Quarterly Report" in mixed_md_str and "without artificial paragraph breaks." in mixed_md_str
+
+    # 30d. Namespaced RSS XML + REST envelope JSON -> CSV / XLSX / XML
+    rss_xml = test_dir / "rss_ns.xml"
+    rss_xml.write_text(
+        '<?xml version="1.0"?><rss version="2.0" xmlns:dc="http://purl.org/dc/elements/1.1/">'
+        '<channel><title>Tulusy Feed</title><item><title>Post A</title><dc:creator>Alice</dc:creator></item>'
+        '<item><title>Post B</title><dc:creator>Bob</dc:creator></item></channel></rss>',
+        encoding="utf-8",
+    )
+    rss_csv = test_dir / "rss_ns.csv"
+    convert_structured_data(rss_xml, "xml", "csv", rss_csv)
+    rss_csv_lines = rss_csv.read_text(encoding="utf-8").splitlines()
+    assert rss_csv_lines[0] == "title,creator" and len(rss_csv_lines) == 3, f"Unexpected RSS->CSV: {rss_csv_lines}"
+    rss_roundtrip_xml = test_dir / "rss_clean.xml"
+    convert_structured_data(rss_xml, "xml", "xml", rss_roundtrip_xml)
+    assert "_http___" not in rss_roundtrip_xml.read_text(encoding="utf-8")
+
+    # 30e. CSV with >128KB cell -> JSON & XLSX
+    huge_cell_csv = test_dir / "huge_cell.csv"
+    huge_cell_csv.write_text('id,body\n1,"' + ("A" * 200_000) + '"\n', encoding="utf-8")
+    convert_structured_data(huge_cell_csv, "csv", "json", test_dir / "huge_cell.json")
+    convert_structured_data(huge_cell_csv, "csv", "xlsx", test_dir / "huge_cell.xlsx")
+
+    # 30f. /api/convert/image supports format aliases (j2k) and extensionless MIME uploads
+    with open(wide_png, "rb") as fp:
+        alias_img_resp = client.post(
+            "/api/convert/image",
+            files={"file": ("clipboard_image", fp, "image/png")},
+            data={"target_format": "j2k"},
+        )
+    assert alias_img_resp.status_code == 200 and len(alias_img_resp.content) > 0
+
+    # 30g. Skinny 1x500 -> ICO, loose inline/text HTML -> DOCX, ISO-8859-1 XML & multi-doc YAML
+    skinny_png = test_dir / "skinny_1x500.png"
+    Image.new("RGBA", (1, 500), (10, 20, 30, 255)).save(skinny_png)
+    convert_single_image(skinny_png, test_dir / "skinny_1x500.ico", "ico")
+    assert (test_dir / "skinny_1x500.ico").stat().st_size > 0
+
+    mixed_inline_html = test_dir / "mixed_inline.html"
+    mixed_inline_html.write_text(
+        "<body>Intro text <a href='https://tulusy.cc'>Link</a><p>Para</p><div><span>Span</span><p>Inner</p>After</div></body>",
+        encoding="utf-8",
+    )
+    mixed_inline_docx = test_dir / "mixed_inline.docx"
+    convert_markup_or_ebook(mixed_inline_html, "html", "docx", mixed_inline_docx)
+    inline_paras = " | ".join(p.text for p in _DocxDoc(str(mixed_inline_docx)).paragraphs)
+    for expected in ("Intro text", "Link", "Para", "Span", "Inner", "After"):
+        assert expected in inline_paras, f"Missing {expected!r} in {inline_paras!r}"
+
+    latin1_xml = test_dir / "latin1.xml"
+    latin1_xml.write_bytes('<?xml version="1.0" encoding="ISO-8859-1"?><root><item>Café</item></root>'.encode("latin-1"))
+    latin1_json = test_dir / "latin1.json"
+    convert_structured_data(latin1_xml, "xml", "json", latin1_json)
+    assert "Café" in latin1_json.read_text(encoding="utf-8")
+
+    multi_yaml = test_dir / "multi.yaml"
+    multi_yaml.write_text("---\nname: one\n---\nname: two\n", encoding="utf-8")
+    multi_csv = test_dir / "multi.csv"
+    convert_structured_data(multi_yaml, "yaml", "csv", multi_csv)
+    assert len(multi_csv.read_text(encoding="utf-8").splitlines()) == 3
+    print("[PASS] Final hardening regressions (ICNS padding, 1x500 ICO, mixed HTML DOCX, ISO-8859-1 XML, multi-doc YAML, ctrl-char DOCX/EPUB, reflowable PDF, RSS XML, 200KB CSV, router parity) verified")
 
     print("\n[SUCCESS] ALL BACKEND CONVERSION TESTS PASSED PERFECTLY!")
 

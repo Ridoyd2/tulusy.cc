@@ -4,6 +4,11 @@ import React, { useState, useEffect } from 'react';
 import { X, Lock, Unlock } from 'lucide-react';
 import { ConversionSettings } from '../types';
 
+const LOSSY_OR_QUALITY_FORMATS = new Set([
+  'jpg', 'jpeg', 'webp', 'avif', 'jxl', 'jp2', 'j2k', 'heic', 'heif',
+]);
+const OPAQUE_BG_FORMATS = new Set(['jpg', 'jpeg', 'bmp', 'ppm', 'pdf']);
+
 interface SettingsModalProps {
   isOpen: boolean;
   onClose: () => void;
@@ -49,7 +54,9 @@ const SettingsModalBody: React.FC<SettingsModalProps> = ({
   };
 
   const isPdfSource = (sourceExt || '').toLowerCase() === 'pdf';
-  const showBgColor = !isPdfSource && ['jpg', 'jpeg', 'bmp', 'pdf'].includes((targetFormat || '').toLowerCase());
+  const normTarget = (targetFormat || '').toLowerCase();
+  const showQuality = isBatch || !normTarget || LOSSY_OR_QUALITY_FORMATS.has(normTarget);
+  const showBgColor = isBatch || (!isPdfSource && OPAQUE_BG_FORMATS.has(normTarget));
 
   return (
     <div
@@ -94,29 +101,31 @@ const SettingsModalBody: React.FC<SettingsModalProps> = ({
         {/* Settings Body */}
         <div className="mt-4 space-y-4 text-sm overflow-y-auto pr-1">
           {/* Quality Slider */}
-          <div className="space-y-1.5">
-            <div className="flex items-center justify-between">
-              <label htmlFor="settings-quality" className="text-xs font-medium text-slate-700 dark:text-slate-300">
-                Compression Quality
-              </label>
-              <span className="px-2 py-0.5 text-xs font-mono font-semibold rounded bg-slate-100 dark:bg-slate-800 text-slate-800 dark:text-slate-200 tabular-nums">
-                {settings.quality}%
-              </span>
+          {showQuality && (
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between">
+                <label htmlFor="settings-quality" className="text-xs font-medium text-slate-700 dark:text-slate-300">
+                  Compression Quality
+                </label>
+                <span className="px-2 py-0.5 text-xs font-mono font-semibold rounded bg-slate-100 dark:bg-slate-800 text-slate-800 dark:text-slate-200 tabular-nums">
+                  {settings.quality}%
+                </span>
+              </div>
+              <input
+                id="settings-quality"
+                type="range"
+                min="10"
+                max="100"
+                value={settings.quality}
+                onChange={e => setSettings({ ...settings, quality: parseInt(e.target.value, 10) })}
+                className="w-full h-1.5 bg-slate-200 dark:bg-slate-700 rounded-lg appearance-none cursor-pointer accent-blue-600"
+              />
+              <div className="flex justify-between text-[11px] text-slate-400">
+                <span>Max compression</span>
+                <span>Best quality</span>
+              </div>
             </div>
-            <input
-              id="settings-quality"
-              type="range"
-              min="10"
-              max="100"
-              value={settings.quality}
-              onChange={e => setSettings({ ...settings, quality: parseInt(e.target.value, 10) })}
-              className="w-full h-1.5 bg-slate-200 dark:bg-slate-700 rounded-lg appearance-none cursor-pointer accent-blue-600"
-            />
-            <div className="flex justify-between text-[11px] text-slate-400">
-              <span>Max compression</span>
-              <span>Best quality</span>
-            </div>
-          </div>
+          )}
 
           {/* Dimension Controls */}
           <div className="space-y-1.5">

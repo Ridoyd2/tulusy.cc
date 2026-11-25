@@ -33,12 +33,17 @@ export const metadata: Metadata = {
     template: "%s | Tulusy",
   },
   description:
-    "Free online converter for images, PDFs, documents, and spreadsheets, plus secure 5GB anonymous file sharing. Fast, privacy-first, zero tracking.",
+    "Free online converter for modern images, Camera RAW, PDFs, Office docs, e-books & data (40 formats), plus 5GB anonymous file sharing. Zero tracking.",
   keywords: [
     "file converter",
     "image converter",
     "file share",
     "anonymous file upload",
+    "camera raw converter",
+    "jxl to webp",
+    "markdown to pdf",
+    "epub converter",
+    "json to yaml",
     "pdf to word",
     "png to webp",
     "heic to jpg",
@@ -71,12 +76,12 @@ export const metadata: Metadata = {
     siteName: "Tulusy",
     title: "Tulusy - Free Universal File Converter & 5GB Anonymous Drop",
     description:
-      "Lightning-fast, privacy-first file conversion and anonymous 5GB file sharing. Convert images, PDFs, Word, PowerPoint, and Excel spreadsheets instantly.",
+      "Privacy-first 40-format converter (JXL, AVIF, WebP, Camera RAW, PDF, DOCX, EPUB, JSON, YAML) and anonymous 5GB file sharing.",
   },
   twitter: {
     card: "summary",
     title: "Tulusy - Universal File Converter & 5GB Drop",
-    description: "Fast, privacy-friendly online converter for images, PDFs, documents, and anonymous 5GB file sharing.",
+    description: "Fast, privacy-first 40-format converter for images, Camera RAW, PDFs, docs & data, plus 5GB anonymous sharing.",
   },
   robots: {
     index: true,
@@ -105,7 +110,7 @@ export default function RootLayout({
         name: "Tulusy",
         url: SITE_ROOT_URL,
         description:
-          "Free online file converter for images, PDFs, documents, and spreadsheets, plus 5GB anonymous file sharing.",
+          "Free online 40-format converter for modern images, Camera RAW, PDFs, documents, e-books, and structured data, plus 5GB anonymous file sharing.",
         publisher: {
           "@id": `${SITE_URL}/#organization`,
         },
